@@ -24,12 +24,14 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
-  TextField
+  TextField,
+  IconButton
 } from '@mui/material';
 import SyncIcon from '@mui/icons-material/Sync';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { io } from 'socket.io-client';
-import { apiClient } from '../api/client';
+import { apiClient, deleteTableRow } from '../api/client';
+import DeleteIcon from '@mui/icons-material/Delete';
 import { WS_BASE_URL } from '../config';
 
 const EXCLUDED_COLUMNS = ['created_at', 'updated_at'];
@@ -48,6 +50,8 @@ const SyncDetail = () => {
   const [newRowData, setNewRowData] = useState({});
   const [addingRow, setAddingRow] = useState(false);
   const [addRowError, setAddRowError] = useState(null);
+  const [deleteError, setDeleteError] = useState(null);
+  const [deletingRowKey, setDeletingRowKey] = useState(null);
 
   const isAutoIncrement = (column) => (column.extra || '').toLowerCase().includes('auto_increment');
 
@@ -73,6 +77,13 @@ const SyncDetail = () => {
       if (isAutoIncrement(col)) return false;
       return true;
     });
+  }, [tableSchema]);
+
+  const primaryKeyColumns = useMemo(() => {
+    if (!tableSchema || !Array.isArray(tableSchema.primaryKey)) {
+      return [];
+    }
+    return tableSchema.primaryKey;
   }, [tableSchema]);
 
   const loadTableData = useCallback(async (tableName) => {
@@ -260,6 +271,51 @@ const SyncDetail = () => {
     }
   };
 
+  const buildPrimaryKeyPayload = (row) => {
+    if (!primaryKeyColumns.length) {
+      return null;
+    }
+
+    const payload = {};
+    for (const column of primaryKeyColumns) {
+      const value = row[column];
+      if (value === null || value === undefined || value === '') {
+        return null;
+      }
+      payload[column] = value;
+    }
+    return payload;
+  };
+
+  const handleDeleteRow = async (row) => {
+    if (!syncState?.tableName) return;
+    const primaryKeyPayload = buildPrimaryKeyPayload(row);
+
+    if (!primaryKeyPayload) {
+      setDeleteError('Unable to determine primary key for the selected row.');
+      return;
+    }
+
+    const rowIdentifier = Object.values(primaryKeyPayload).join('-');
+    const confirmed = window.confirm('Delete this row from the table?');
+    if (!confirmed) {
+      return;
+    }
+
+    setDeleteError(null);
+    setDeletingRowKey(rowIdentifier);
+
+    try {
+      await deleteTableRow(syncState.tableName, primaryKeyPayload);
+      await loadTableData(syncState.tableName);
+    } catch (err) {
+      console.error('Failed to delete row', err);
+      setDeleteError(err.response?.data?.error || 'Failed to delete row');
+    } finally {
+      setDeletingRowKey(null);
+    }
+  };
+
   if (loading) {
     return (
       <Container sx={{ mt: 4, display: 'flex', justifyContent: 'center' }}>
@@ -395,38 +451,67 @@ const SyncDetail = () => {
               </Tabs>
 
               {tabValue === 0 && (
-                <TableContainer component={Paper} sx={{ maxHeight: 500 }}>
-                  <Table stickyHeader size="small">
-                    <TableHead>
-                      <TableRow>
-                        {columnsToDisplay.map((key) => (
-                          <TableCell key={key}><strong>{key}</strong></TableCell>
-                        ))}
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {tableData.length === 0 ? (
+                <Box>
+                  {deleteError && (
+                    <Alert severity="error" sx={{ mb: 2 }} onClose={() => setDeleteError(null)}>
+                      {deleteError}
+                    </Alert>
+                  )}
+                  <TableContainer component={Paper} sx={{ maxHeight: 500 }}>
+                    <Table stickyHeader size="small">
+                      <TableHead>
                         <TableRow>
-                          <TableCell colSpan={(columnsToDisplay.length || 1)}>
-                            <Typography variant="body2" color="text.secondary">
-                              No data available
-                            </Typography>
-                          </TableCell>
+                          {columnsToDisplay.map((key) => (
+                            <TableCell key={key}><strong>{key}</strong></TableCell>
+                          ))}
+                          {primaryKeyColumns.length > 0 && (
+                            <TableCell align="center"><strong>Actions</strong></TableCell>
+                          )}
                         </TableRow>
-                      ) : (
-                        tableData.map((row, idx) => (
-                          <TableRow key={idx}>
-                            {columnsToDisplay.map((key) => (
-                              <TableCell key={key}>
-                                {row[key] === null || row[key] === undefined ? <em>null</em> : String(row[key])}
-                              </TableCell>
-                            ))}
+                      </TableHead>
+                      <TableBody>
+                        {tableData.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={(columnsToDisplay.length || 1) + (primaryKeyColumns.length ? 1 : 0)}>
+                              <Typography variant="body2" color="text.secondary">
+                                No data available
+                              </Typography>
+                            </TableCell>
                           </TableRow>
-                        ))
-                      )}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
+                        ) : (
+                          tableData.map((row, idx) => {
+                            const rowKey = primaryKeyColumns
+                              .map((col) => row[col])
+                              .filter((val) => val !== undefined && val !== null)
+                              .join('-') || idx;
+
+                            return (
+                              <TableRow key={rowKey}>
+                                {columnsToDisplay.map((key) => (
+                                  <TableCell key={key}>
+                                    {row[key] === null || row[key] === undefined ? <em>null</em> : String(row[key])}
+                                  </TableCell>
+                                ))}
+                                {primaryKeyColumns.length > 0 && (
+                                  <TableCell align="center">
+                                    <IconButton
+                                      color="error"
+                                      size="small"
+                                      onClick={() => handleDeleteRow(row)}
+                                      disabled={deletingRowKey === rowKey}
+                                    >
+                                      <DeleteIcon fontSize="small" />
+                                    </IconButton>
+                                  </TableCell>
+                                )}
+                              </TableRow>
+                            );
+                          })
+                        )}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </Box>
               )}
 
               {tabValue === 1 && (
