@@ -15,7 +15,7 @@ import {
   CircularProgress
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import { apiClient } from '../api/client';
 
 const ConfigureSync = () => {
   const [tables, setTables] = useState([]);
@@ -38,7 +38,7 @@ const ConfigureSync = () => {
 
   const loadTables = async () => {
     try {
-      const response = await axios.get('/api/tables');
+      const response = await apiClient.get('/api/tables');
       setTables(response.data.data);
     } catch (err) {
       setError('Failed to load tables');
@@ -61,7 +61,7 @@ const ConfigureSync = () => {
     setError(null);
 
     try {
-      const response = await axios.post('/api/sync/configure', formData);
+      await apiClient.post('/api/sync/configure', formData);
       setSuccess(true);
       setTimeout(() => {
         navigate('/');
@@ -213,8 +213,8 @@ const ConfigureSync = () => {
             <li>Go to Google Cloud Console</li>
             <li>Enable Google Sheets API</li>
             <li>Create OAuth 2.0 credentials</li>
-            <li>Add redirect URI: http://localhost:3001/auth/google/callback</li>
-            <li>Visit /auth/google to authenticate</li>
+            <li>Add redirect URI: http://localhost:3001/api/auth/google/callback</li>
+            <li>Visit /api/auth/google to authenticate</li>
           </ul>
 
           <Typography variant="body2" paragraph>

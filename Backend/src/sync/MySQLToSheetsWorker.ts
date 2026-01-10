@@ -5,6 +5,8 @@ import { Server as SocketServer } from 'socket.io';
 import { SyncState } from '../types';
 import { logger } from '../utils/logger';
 
+const EXCLUDED_COLUMNS = new Set(['created_at', 'updated_at']);
+
 export class MySQLToSheetsWorker {
   private syncState: SyncState;
   private dbManager: DatabaseManager;
@@ -81,14 +83,25 @@ export class MySQLToSheetsWorker {
 
       // Get table schema for column mapping
       const schema = await this.dbManager.getTableSchema(this.syncState.tableName);
-      const headers = schema.columns.map(col => col.name);
       const primaryKey = schema.primaryKey[0] || 'id';
+      const headers = schema.columns
+        .filter(col => !EXCLUDED_COLUMNS.has(col.name) || col.name === primaryKey)
+        .map(col => col.name);
 
       // Read current sheet data to find row positions
-      const sheetData = await this.googleSheets.readSheet(
+      let sheetData = await this.googleSheets.readSheet(
         this.syncState.sheetId,
-        `${this.syncState.sheetName}!A:ZZ`
+        GoogleSheetsService.buildRange(this.syncState.sheetName, 'A:ZZ')
       );
+
+      if (!this.headersMatch(sheetData.headers, headers)) {
+        logger.info(`Sheet headers changed for ${this.syncState.sheetId}, rebuilding sheet to enforce column visibility`);
+        await this.rebuildSheet(headers);
+        sheetData = await this.googleSheets.readSheet(
+          this.syncState.sheetId,
+          GoogleSheetsService.buildRange(this.syncState.sheetName, 'A:ZZ')
+        );
+      }
 
       const updates: Array<{ range: string; values: any[][] }> = [];
       const rowsToAppend: any[][] = [];
@@ -122,8 +135,9 @@ export class MySQLToSheetsWorker {
                 return value === null || value === undefined ? '' : value;
               });
 
+              const cellRange = `A${sheetRow}:${this.columnToLetter(headers.length)}${sheetRow}`;
               updates.push({
-                range: `${this.syncState.sheetName}!A${sheetRow}:${this.columnToLetter(headers.length)}${sheetRow}`,
+                range: GoogleSheetsService.buildRange(this.syncState.sheetName, cellRange),
                 values: [rowData]
               });
             } else {
@@ -217,6 +231,31 @@ export class MySQLToSheetsWorker {
     } finally {
       await this.redisClient.releaseLock(lockKey);
     }
+  }
+
+  private headersMatch(currentHeaders: string[], desiredHeaders: string[]): boolean {
+    if (!currentHeaders || currentHeaders.length !== desiredHeaders.length) {
+      return false;
+    }
+
+    return desiredHeaders.every((header, index) => currentHeaders[index] === header);
+  }
+
+  private async rebuildSheet(headers: string[]): Promise<void> {
+    const rows = await this.dbManager.getTableData(this.syncState.tableName);
+    const formattedRows = this.googleSheets.formatDataForSheets(rows, headers);
+    const payload = [headers, ...formattedRows];
+
+    await this.googleSheets.clearRange(
+      this.syncState.sheetId,
+      GoogleSheetsService.buildRange(this.syncState.sheetName, 'A:ZZ')
+    );
+
+    await this.googleSheets.writeSheet(
+      this.syncState.sheetId,
+      GoogleSheetsService.buildRange(this.syncState.sheetName, 'A1'),
+      payload
+    );
   }
 
   private findRowIndexByPrimaryKey(

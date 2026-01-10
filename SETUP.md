@@ -4,7 +4,7 @@
 
 ### 1. Install Dependencies
 ```bash
-cd Backend/src
+cd Backend
 npm install
 ```
 
@@ -24,7 +24,7 @@ docker ps
 ```
 
 You should see:
-- superjoin-mysql (port 3306)
+- superjoin-mysql (host port 3307)
 - superjoin-redis (port 6379)
 
 ### 4. Verify Database Initialization
@@ -43,12 +43,12 @@ Backend should start on http://localhost:3001
 
 ### Troubleshooting Backend
 
-**Port 3306 already in use:**
+**Port 3307 already in use:**
 ```bash
 # Stop local MySQL if running
 net stop MySQL80
 
-# Or change port in docker-compose.yml to 3307:3306
+# Or change port mapping in docker-compose.yml
 ```
 
 **MySQL container won't start:**
@@ -110,18 +110,18 @@ npm install
 2. Click **Create Credentials** → **OAuth 2.0 Client ID**
 3. Application type: **Web application**
 4. Name: "Superjoin Sync"
-5. Authorized redirect URIs: `http://localhost:3001/auth/google/callback`
+5. Authorized redirect URIs: `http://localhost:3001/api/auth/google/callback`
 6. Click **Create**
 7. Copy **Client ID** and **Client Secret**
 
 ### 3. Get Refresh Token
-1. Update Backend/src/.env with Client ID and Secret
+1. Update Backend/.env with Client ID and Secret
 2. Start backend server
-3. Open browser: http://localhost:3001/auth/google
+3. Open browser: http://localhost:3001/api/auth/google
 4. Login with Google account
 5. Grant permissions
 6. Copy the `refresh_token` from the response
-7. Add it to Backend/src/.env as `GOOGLE_REFRESH_TOKEN`
+7. Add it to Backend/.env as `GOOGLE_REFRESH_TOKEN`
 8. Restart backend server
 
 ---
@@ -181,7 +181,7 @@ docker exec -it superjoin-mysql mysql -usuperjoin_user -psuperjoin_pass superjoi
 - Ensure `FRONTEND_URL` in backend .env is correct
 
 ### "Sync not working"
-- Check backend logs in Backend/src/logs/combined.log
+- Check backend logs in Backend/logs/combined.log
 - Verify both MySQL and Redis are running: `docker ps`
 - Check sync status in frontend dashboard
 
@@ -191,7 +191,7 @@ docker exec -it superjoin-mysql mysql -usuperjoin_user -psuperjoin_pass superjoi
 
 ### Backend Development
 ```bash
-cd Backend/src
+cd Backend
 npm run dev  # Auto-reloads on file changes
 ```
 
@@ -204,7 +204,7 @@ npm start  # Auto-reloads on file changes
 ### View Logs
 ```bash
 # Backend logs
-tail -f Backend/src/logs/combined.log
+tail -f Backend/logs/combined.log
 
 # Docker logs
 docker logs -f superjoin-mysql
@@ -239,7 +239,7 @@ See individual README files:
 
 ## Need Help?
 
-1. Check logs: `Backend/src/logs/combined.log`
+1. Check logs: `Backend/logs/combined.log`
 2. Check backend health: http://localhost:3001/health
 3. Review error messages in browser console (F12)
 4. Check Docker containers: `docker ps`

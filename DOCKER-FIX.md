@@ -94,12 +94,12 @@ docker-compose up -d
 ## Next Steps After Docker is Running
 
 1. **Configure Google Credentials**
-   - Edit `Backend/src/.env`
+   - Edit `Backend/.env`
    - Add your Google OAuth credentials
 
 2. **Start Backend**
    ```powershell
-   cd Backend\src
+   cd Backend
    npm run dev
    ```
 

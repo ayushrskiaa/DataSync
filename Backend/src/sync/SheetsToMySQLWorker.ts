@@ -1,9 +1,10 @@
-import { DatabaseManager } from '../database/DatabaseManager';
-import { GoogleSheetsService } from '../services/GoogleSheetsService';
-import { RedisClient } from '../services/RedisClient';
-import { Server as SocketServer } from 'socket.io';
-import { SyncState, ChangeDetectionResult } from '../types';
-import { logger } from '../utils/logger';
+import { DatabaseManager } from "../database/DatabaseManager";
+import { GoogleSheetsService } from "../services/GoogleSheetsService";
+import { RedisClient } from "../services/RedisClient";
+import { Server as SocketServer } from "socket.io";
+import { RowDataPacket } from "mysql2/promise";
+import { SyncState, ChangeDetectionResult, SheetRowChange, TableSchema } from "../types";
+import { logger } from "../utils/logger";
 
 interface SheetSnapshot {
   timestamp: Date;
@@ -18,7 +19,7 @@ export class SheetsToMySQLWorker {
   private redisClient: RedisClient;
   private io: SocketServer;
   private intervalId: NodeJS.Timeout | null = null;
-  private running: boolean = false;
+  private running = false;
   private syncInterval: number;
   private lastSnapshot: SheetSnapshot | null = null;
 
@@ -34,18 +35,18 @@ export class SheetsToMySQLWorker {
     this.googleSheets = googleSheets;
     this.redisClient = redisClient;
     this.io = io;
-    this.syncInterval = parseInt(process.env.SYNC_INTERVAL_MS || '2000');
+    this.syncInterval = parseInt(process.env.SYNC_INTERVAL_MS || "2000");
   }
 
   start(): void {
     if (this.running) {
-      logger.warn(`Sheets→MySQL worker already running for ${this.syncState.sheetId}`);
+      logger.warn(`Sheets->MySQL worker already running for ${this.syncState.sheetId}`);
       return;
     }
 
     this.running = true;
     this.intervalId = setInterval(() => this.sync(), this.syncInterval);
-    logger.info(`Sheets→MySQL worker started for ${this.syncState.sheetId}`);
+    logger.info(`Sheets->MySQL worker started for ${this.syncState.sheetId}`);
   }
 
   stop(): void {
@@ -54,7 +55,7 @@ export class SheetsToMySQLWorker {
       this.intervalId = null;
     }
     this.running = false;
-    logger.info(`Sheets→MySQL worker stopped for ${this.syncState.sheetId}`);
+    logger.info(`Sheets->MySQL worker stopped for ${this.syncState.sheetId}`);
   }
 
   async syncNow(): Promise<void> {
@@ -62,7 +63,6 @@ export class SheetsToMySQLWorker {
   }
 
   private async sync(): Promise<void> {
-    // Acquire lock to prevent concurrent syncs
     const lockKey = `sheets_to_mysql_${this.syncState.sheetId}`;
     const lockAcquired = await this.redisClient.acquireLock(lockKey, 30);
 
@@ -72,23 +72,30 @@ export class SheetsToMySQLWorker {
     }
 
     try {
-      // Read current sheet data
-      const sheetData = await this.googleSheets.readSheet(
-        this.syncState.sheetId,
-        `${this.syncState.sheetName}!A:ZZ`
-      );
+      await this.refreshSyncStateTimestamps();
 
-      // Parse data
-      const currentData = this.googleSheets.parseDataFromSheets(
-        sheetData.values,
-        sheetData.headers
-      );
+      const sheetRange = GoogleSheetsService.buildRange(this.syncState.sheetName, "A:ZZ");
+      const sheetData = await this.googleSheets.readSheet(this.syncState.sheetId, sheetRange);
 
-      // Get table schema
+      if (!sheetData.headers || sheetData.headers.length === 0) {
+        logger.warn(`Sheet ${this.syncState.sheetId} has no headers, skipping sync`);
+        return;
+      }
+
+      const currentData = this.googleSheets.parseDataFromSheets(sheetData.values, sheetData.headers);
       const schema = await this.dbManager.getTableSchema(this.syncState.tableName);
-      const primaryKey = schema.primaryKey[0] || 'id';
+      const primaryKey = schema.primaryKey[0] || "id";
+      const schemaColumns = schema.columns.map(col => col.name);
 
-      // Check for changes
+      const primaryKeyColumnIndex = sheetData.headers.findIndex(header => header === primaryKey);
+      if (primaryKeyColumnIndex === -1) {
+        throw new Error(
+          `Primary key column "${primaryKey}" is missing from sheet "${this.syncState.sheetName}". ` +
+            "Column names must exactly match the database schema."
+        );
+      }
+      const primaryKeyColumnLetter = this.columnToLetter(primaryKeyColumnIndex + 1);
+
       const cachedSnapshot = await this.redisClient.getCache<SheetSnapshot>(
         `sheet_snapshot_${this.syncState.sheetId}`
       );
@@ -101,124 +108,185 @@ export class SheetsToMySQLWorker {
       }
 
       if (!this.lastSnapshot) {
-        // First sync - just store snapshot
         await this.storeSnapshot(currentData);
         logger.info(`Initial snapshot stored for ${this.syncState.sheetId}`);
         return;
       }
 
-      // Detect changes
       const changes = this.detectChanges(this.lastSnapshot.data, currentData, primaryKey);
-
       if (changes.added.length === 0 && changes.updated.length === 0 && changes.deleted.length === 0) {
-        return; // No changes detected
+        return;
       }
 
       logger.info(
         `Detected ${changes.added.length} inserts, ${changes.updated.length} updates, ${changes.deleted.length} deletes`
       );
 
-      // Apply changes to MySQL
       const connection = await this.dbManager.getConnection();
-      
+
       try {
         await connection.beginTransaction();
+        const pendingPrimaryKeyUpdates: Array<{ rowIndex: number; value: any }> = [];
 
-        // Process inserts
-        for (const row of changes.added) {
+        for (const change of changes.added) {
+          const { row, rowIndex } = change;
+
           try {
-            const cleanedRow = this.cleanRowData(row, schema.columns.map(c => c.name));
-            await this.dbManager.insertRow(this.syncState.tableName, cleanedRow);
+            const cleanedRow = this.cleanRowData(row, schemaColumns);
+
+            if (this.hasPrimaryKeyValue(row[primaryKey])) {
+              const pk = { [primaryKey]: row[primaryKey] };
+              const existing = await this.dbManager.getRowByPrimaryKey(this.syncState.tableName, pk);
+
+              if (existing) {
+                if (this.rowsEqual(existing, cleanedRow)) {
+                  continue;
+                }
+
+                await this.dbManager.updateRow(this.syncState.tableName, pk, cleanedRow);
+                  await this.dbManager.markLatestRowChangeSynced(
+                    this.syncState.tableName,
+                    row[primaryKey],
+                    'UPDATE'
+                  );
+                continue;
+              }
+            }
+
+            const missingRequired = this.findMissingRequiredColumns(row, schema, primaryKey);
+            if (missingRequired.length > 0) {
+              logger.warn(
+                `Skipping insert for sheet row ${rowIndex} due to missing required columns: ${missingRequired.join(", ")}`
+              );
+              continue;
+            }
+
+            const result = await this.dbManager.insertRow(this.syncState.tableName, cleanedRow);
+            const insertedPk = this.hasPrimaryKeyValue(row[primaryKey]) ? row[primaryKey] : result?.insertId;
+            await this.dbManager.markLatestRowChangeSynced(
+              this.syncState.tableName,
+              insertedPk,
+              'INSERT'
+            );
+
+            if (!this.hasPrimaryKeyValue(row[primaryKey]) && result?.insertId) {
+              pendingPrimaryKeyUpdates.push({ rowIndex, value: result.insertId });
+            }
           } catch (error) {
-            logger.error(`Failed to insert row`, { row, error });
+            logger.error(`Failed to insert row from sheet row ${rowIndex}`, { error });
           }
         }
 
-        // Process updates
-        for (const row of changes.updated) {
+        for (const change of changes.updated) {
+          const { row, rowIndex } = change;
+
           try {
-            const cleanedRow = this.cleanRowData(row, schema.columns.map(c => c.name));
+            if (!this.hasPrimaryKeyValue(row[primaryKey])) {
+              logger.warn(
+                `Skipping update for sheet row ${rowIndex} because primary key "${primaryKey}" is missing`
+              );
+              continue;
+            }
+
+            const cleanedRow = this.cleanRowData(row, schemaColumns);
             const pk = { [primaryKey]: row[primaryKey] };
-            
-            // Check if row exists
-            const existing = await this.dbManager.getRowByPrimaryKey(
-              this.syncState.tableName,
-              pk
-            );
+            const existing = await this.dbManager.getRowByPrimaryKey(this.syncState.tableName, pk);
 
             if (existing) {
-              // Check for conflicts
-              const hasConflict = await this.detectConflict(
-                existing,
-                cleanedRow,
-                this.syncState
-              );
-
+              const hasConflict = await this.detectConflict(existing, cleanedRow, this.syncState);
               if (hasConflict) {
                 await this.handleConflict(existing, cleanedRow, row[primaryKey]);
               } else {
                 await this.dbManager.updateRow(this.syncState.tableName, pk, cleanedRow);
+                await this.dbManager.markLatestRowChangeSynced(
+                  this.syncState.tableName,
+                  row[primaryKey],
+                  'UPDATE'
+                );
               }
             } else {
-              // Row doesn't exist, treat as insert
-              await this.dbManager.insertRow(this.syncState.tableName, cleanedRow);
+              const result = await this.dbManager.insertRow(this.syncState.tableName, cleanedRow);
+              const insertedPk = this.hasPrimaryKeyValue(row[primaryKey]) ? row[primaryKey] : result?.insertId;
+              await this.dbManager.markLatestRowChangeSynced(
+                this.syncState.tableName,
+                insertedPk,
+                'INSERT'
+              );
+              if (result?.insertId) {
+                pendingPrimaryKeyUpdates.push({ rowIndex, value: result.insertId });
+              }
             }
           } catch (error) {
-            logger.error(`Failed to update row`, { row, error });
+            logger.error(`Failed to update row from sheet row ${rowIndex}`, { error });
           }
         }
 
-        // Process deletes
         for (const row of changes.deleted) {
           try {
+            if (!this.hasPrimaryKeyValue(row[primaryKey])) {
+              continue;
+            }
+
             const pk = { [primaryKey]: row[primaryKey] };
             await this.dbManager.deleteRow(this.syncState.tableName, pk);
+            await this.dbManager.markLatestRowChangeSynced(
+              this.syncState.tableName,
+              row[primaryKey],
+              'DELETE'
+            );
           } catch (error) {
             logger.error(`Failed to delete row`, { row, error });
           }
         }
 
         await connection.commit();
-
-        // Update snapshot
         await this.storeSnapshot(currentData);
 
-        // Update sync state
+        if (pendingPrimaryKeyUpdates.length > 0) {
+          const updates = pendingPrimaryKeyUpdates.map(update => ({
+            range: GoogleSheetsService.buildRange(
+              this.syncState.sheetName,
+              `${primaryKeyColumnLetter}${update.rowIndex}:${primaryKeyColumnLetter}${update.rowIndex}`
+            ),
+            values: [[update.value]]
+          }));
+
+          await this.googleSheets.updateCells(this.syncState.sheetId, updates);
+        }
+
         await this.dbManager.getPool().query(
-          `UPDATE _sync_state SET last_sheet_sync = NOW() WHERE sheet_id = ?`,
+          `UPDATE _sync_state SET last_sheet_sync = NOW(6), last_sync_timestamp = NOW(6) WHERE sheet_id = ?`,
           [this.syncState.sheetId]
         );
+        const now = new Date();
+        this.syncState.lastSheetSync = now.toISOString();
+        this.syncState.lastSyncTimestamp = now;
 
-        // Emit sync event
-        this.io.to(`sync_${this.syncState.sheetId}`).emit('data_changed', {
-          source: 'sheets',
+        this.io.to(`sync_${this.syncState.sheetId}`).emit("data_changed", {
+          source: "sheets",
           changeCount: changes.added.length + changes.updated.length + changes.deleted.length,
           timestamp: new Date()
         });
 
-        logger.info(`Sheets→MySQL sync completed for ${this.syncState.sheetId}`);
-
+        logger.info(`Sheets->MySQL sync completed for ${this.syncState.sheetId}`);
       } catch (error) {
         await connection.rollback();
         throw error;
       } finally {
         connection.release();
       }
-
     } catch (error) {
-      logger.error(`Sheets→MySQL sync failed for ${this.syncState.sheetId}`, error);
+      logger.error(`Sheets->MySQL sync failed for ${this.syncState.sheetId}`, error);
 
-      // Update error status
       await this.dbManager.getPool().query(
         `UPDATE _sync_state SET status = 'error', error_message = ? WHERE sheet_id = ?`,
         [error instanceof Error ? error.message : String(error), this.syncState.sheetId]
       );
 
-      this.io.to(`sync_${this.syncState.sheetId}`).emit('sync_error', {
-        source: 'sheets',
+      this.io.to(`sync_${this.syncState.sheetId}`).emit("sync_error", {
+        source: "sheets",
         error: error instanceof Error ? error.message : String(error)
       });
-
     } finally {
       await this.redisClient.releaseLock(lockKey);
     }
@@ -229,27 +297,39 @@ export class SheetsToMySQLWorker {
     newData: any[],
     primaryKey: string
   ): ChangeDetectionResult {
-    const added: any[] = [];
-    const updated: any[] = [];
+    const added: SheetRowChange[] = [];
+    const updated: SheetRowChange[] = [];
     const deleted: any[] = [];
 
-    // Create maps for efficient lookup
-    const oldMap = new Map(oldData.map(row => [String(row[primaryKey]), row]));
-    const newMap = new Map(newData.map(row => [String(row[primaryKey]), row]));
-
-    // Find added and updated rows
-    for (const [key, newRow] of newMap.entries()) {
-      if (!oldMap.has(key)) {
-        added.push(newRow);
-      } else {
-        const oldRow = oldMap.get(key);
-        if (JSON.stringify(oldRow) !== JSON.stringify(newRow)) {
-          updated.push(newRow);
-        }
+    const oldMap = new Map<string, any>();
+    for (const row of oldData) {
+      if (this.hasPrimaryKeyValue(row[primaryKey])) {
+        oldMap.set(String(row[primaryKey]), row);
       }
     }
 
-    // Find deleted rows
+    const newMap = new Map<string, SheetRowChange>();
+    newData.forEach((row, index) => {
+      const rowIndex = index + 2;
+      const key = this.hasPrimaryKeyValue(row[primaryKey]) ? String(row[primaryKey]) : null;
+
+      if (key) {
+        newMap.set(key, { row, rowIndex });
+      }
+
+      if (!key) {
+        added.push({ row, rowIndex });
+        return;
+      }
+
+      const oldRow = oldMap.get(key);
+      if (!oldRow) {
+        added.push({ row, rowIndex });
+      } else if (JSON.stringify(oldRow) !== JSON.stringify(row)) {
+        updated.push({ row, rowIndex });
+      }
+    });
+
     for (const [key, oldRow] of oldMap.entries()) {
       if (!newMap.has(key)) {
         deleted.push(oldRow);
@@ -270,7 +350,7 @@ export class SheetsToMySQLWorker {
     await this.redisClient.setCache(
       `sheet_snapshot_${this.syncState.sheetId}`,
       snapshot,
-      3600 // 1 hour TTL
+      3600
     );
   }
 
@@ -280,25 +360,97 @@ export class SheetsToMySQLWorker {
     for (let i = 0; i < str.length; i++) {
       const char = str.charCodeAt(i);
       hash = ((hash << 5) - hash) + char;
-      hash = hash & hash; // Convert to 32-bit integer
+      hash = hash & hash;
     }
     return hash.toString();
   }
 
   private cleanRowData(row: any, validColumns: string[]): Record<string, any> {
-    const ignoredColumns = new Set(['created_at', 'updated_at']);
+    const ignoredColumns = new Set(["created_at", "updated_at"]);
     const cleaned: Record<string, any> = {};
+
     for (const col of validColumns) {
       if (ignoredColumns.has(col)) {
         continue;
       }
+
       if (col in row) {
         const value = row[col];
-        // Convert empty strings to null
-        cleaned[col] = value === '' ? null : value;
+        cleaned[col] = value === "" ? null : value;
       }
     }
+
     return cleaned;
+  }
+
+  private rowsEqual(dbRow: any, newRow: Record<string, any>): boolean {
+    for (const [column, sheetValue] of Object.entries(newRow)) {
+      const dbValue = dbRow[column];
+      if (this.normalizeValue(dbValue) !== this.normalizeValue(sheetValue)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private normalizeValue(value: any): string | number | boolean | null {
+    if (value === null || value === undefined) {
+      return null;
+    }
+
+    if (value instanceof Date) {
+      return value.toISOString();
+    }
+
+    if (typeof value === "number" || typeof value === "boolean") {
+      return value;
+    }
+
+    return String(value);
+  }
+
+  private findMissingRequiredColumns(row: any, schema: TableSchema, primaryKey: string): string[] {
+    return schema.columns
+      .filter(col => {
+        if (col.name === primaryKey && (col.extra || "").includes("auto_increment")) {
+          return false;
+        }
+        return !col.nullable && col.defaultValue === null;
+      })
+      .filter(col => !this.hasPrimaryKeyValue(row[col.name]))
+      .map(col => col.name);
+  }
+
+  private hasPrimaryKeyValue(value: any): boolean {
+    return value !== null && value !== undefined && value !== "";
+  }
+
+  private columnToLetter(column: number): string {
+    let temp = column;
+    let letter = "";
+    while (temp > 0) {
+      const mod = (temp - 1) % 26;
+      letter = String.fromCharCode(65 + mod) + letter;
+      temp = Math.floor((temp - mod) / 26);
+    }
+    return letter;
+  }
+
+  private async refreshSyncStateTimestamps(): Promise<void> {
+    const [rows] = await this.dbManager.getPool().query<RowDataPacket[]>(
+      `SELECT last_sync_timestamp, last_sheet_sync FROM _sync_state WHERE id = ?`,
+      [this.syncState.id]
+    );
+
+    if (rows.length > 0) {
+      const record = rows[0];
+      this.syncState.lastSyncTimestamp = record.last_sync_timestamp
+        ? new Date(record.last_sync_timestamp)
+        : null;
+      this.syncState.lastSheetSync = record.last_sheet_sync
+        ? new Date(record.last_sheet_sync).toISOString()
+        : null;
+    }
   }
 
   private async detectConflict(
@@ -306,19 +458,13 @@ export class SheetsToMySQLWorker {
     _sheetRow: any,
     syncState: SyncState
   ): Promise<boolean> {
-    // Check if database row was modified after last sync
     const lastSync = syncState.lastSyncTimestamp;
-    if (!lastSync) return false;
-
-    // If row has updated_at timestamp, check if it's newer than last sync
-    if (dbRow.updated_at) {
-      const dbUpdateTime = new Date(dbRow.updated_at);
-      if (dbUpdateTime > lastSync) {
-        return true; // Concurrent modification detected
-      }
+    if (!lastSync || !dbRow?.updated_at) {
+      return false;
     }
 
-    return false;
+    const dbUpdateTime = new Date(dbRow.updated_at);
+    return dbUpdateTime > lastSync;
   }
 
   private async handleConflict(
@@ -328,9 +474,10 @@ export class SheetsToMySQLWorker {
   ): Promise<void> {
     logger.warn(`Conflict detected for row ${rowId}`);
 
-    // Log conflict to database
+    const resolutionStatus = this.mapConflictResolutionStatus();
+
     await this.dbManager.getPool().query(
-      `INSERT INTO _sync_conflicts 
+      `INSERT INTO _sync_conflicts
        (sync_state_id, row_identifier, conflict_type, sheet_data, db_data, sheet_timestamp, db_timestamp, resolution)
        VALUES (?, ?, 'concurrent_update', ?, ?, NOW(6), NOW(6), ?)`,
       [
@@ -338,43 +485,47 @@ export class SheetsToMySQLWorker {
         String(rowId),
         JSON.stringify(sheetRow),
         JSON.stringify(dbRow),
-        this.syncState.conflictResolution === 'manual' ? 'pending' : this.syncState.conflictResolution
+        resolutionStatus
       ]
     );
 
-    // Apply conflict resolution strategy
     switch (this.syncState.conflictResolution) {
-      case 'last_write_wins':
-        // Sheet wins (it's the most recent change)
+      case "last_write_wins":
+      case "sheet_priority":
         await this.dbManager.updateRow(
           this.syncState.tableName,
           { [Object.keys(dbRow)[0]]: rowId },
           sheetRow
         );
-        break;
-
-      case 'sheet_priority':
-        // Sheet always wins
-        await this.dbManager.updateRow(
+        await this.dbManager.markLatestRowChangeSynced(
           this.syncState.tableName,
-          { [Object.keys(dbRow)[0]]: rowId },
-          sheetRow
+          rowId,
+          'UPDATE'
         );
         break;
-
-      case 'db_priority':
-        // DB wins, revert sheet (this would need additional implementation)
+      case "db_priority":
         logger.info(`DB priority: keeping database version for row ${rowId}`);
         break;
-
-      case 'manual':
-        // Emit conflict event for manual resolution
-        this.io.to(`sync_${this.syncState.sheetId}`).emit('conflict_detected', {
+      case "manual":
+        this.io.to(`sync_${this.syncState.sheetId}`).emit("conflict_detected", {
           rowId,
           sheetData: sheetRow,
           dbData: dbRow
         });
         break;
+    }
+  }
+
+  private mapConflictResolutionStatus(): "pending" | "sheet_wins" | "db_wins" {
+    switch (this.syncState.conflictResolution) {
+      case "manual":
+        return "pending";
+      case "db_priority":
+        return "db_wins";
+      case "sheet_priority":
+      case "last_write_wins":
+      default:
+        return "sheet_wins";
     }
   }
 }

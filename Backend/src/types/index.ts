@@ -74,8 +74,13 @@ export interface SyncResult {
   errors: string[];
 }
 
+export interface SheetRowChange {
+  row: any;
+  rowIndex: number;
+}
+
 export interface ChangeDetectionResult {
-  added: any[];
-  updated: any[];
+  added: SheetRowChange[];
+  updated: SheetRowChange[];
   deleted: any[];
 }

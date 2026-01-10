@@ -6,7 +6,9 @@ import { logger } from '../utils/logger';
 import { SyncConfig, SyncState } from '../types';
 import { MySQLToSheetsWorker } from './MySQLToSheetsWorker';
 import { SheetsToMySQLWorker } from './SheetsToMySQLWorker';
-import { RowDataPacket } from 'mysql2/promise';
+import { ResultSetHeader, RowDataPacket } from 'mysql2/promise';
+
+const EXCLUDED_COLUMNS = new Set(['created_at', 'updated_at']);
 
 export class SyncOrchestrator {
   private dbManager: DatabaseManager;
@@ -65,14 +67,19 @@ export class SyncOrchestrator {
 
   async configureSync(config: SyncConfig): Promise<SyncState> {
     try {
+      const requestedSheetName = (config.sheetName || 'Sheet1').trim();
+
       // Validate table exists
       const tables = await this.dbManager.listTables();
       if (!tables.includes(config.tableName)) {
         throw new Error(`Table ${config.tableName} does not exist`);
       }
 
-      // Validate sheet access
-      await this.googleSheets.getSpreadsheetInfo(config.sheetId);
+      // Validate sheet access and capture canonical sheet title
+      const canonicalSheetName = await this.googleSheets.verifySheetExists(
+        config.sheetId,
+        requestedSheetName
+      );
 
       // Check if sync already exists
       const existing = await this.getSyncState(config.sheetId);
@@ -85,7 +92,7 @@ export class SyncOrchestrator {
       await pool.query(
         `INSERT INTO _sync_state (sheet_id, sheet_name, table_name, conflict_resolution, status)
          VALUES (?, ?, ?, ?, 'active')`,
-        [config.sheetId, config.sheetName, config.tableName, config.conflictResolution]
+        [config.sheetId, canonicalSheetName, config.tableName, config.conflictResolution]
       );
 
       // Create change tracking triggers
@@ -122,21 +129,26 @@ export class SyncOrchestrator {
       // Get table schema and data
       const schema = await this.dbManager.getTableSchema(syncState.tableName);
       const data = await this.dbManager.getTableData(syncState.tableName);
+      const primaryKey = schema.primaryKey[0] || 'id';
 
-      // Prepare headers
-      const headers = schema.columns.map(col => col.name);
+      const headers = schema.columns
+        .filter(col => !EXCLUDED_COLUMNS.has(col.name) || col.name === primaryKey)
+        .map(col => col.name);
 
       // Format data
       const formattedData = this.googleSheets.formatDataForSheets(data, headers);
 
       // Clear existing data in sheet
-      await this.googleSheets.clearRange(syncState.sheetId, `${syncState.sheetName}!A:ZZ`);
+      await this.googleSheets.clearRange(
+        syncState.sheetId,
+        GoogleSheetsService.buildRange(syncState.sheetName, 'A:ZZ')
+      );
 
       // Write headers and data
       const values = [headers, ...formattedData];
       await this.googleSheets.writeSheet(
         syncState.sheetId,
-        `${syncState.sheetName}!A1`,
+        GoogleSheetsService.buildRange(syncState.sheetName, 'A1'),
         values
       );
 
@@ -154,6 +166,8 @@ export class SyncOrchestrator {
     }
 
     try {
+      await this.dbManager.ensureChangeTrackingTriggers(syncState.tableName);
+
       // Create workers
       const mysqlWorker = new MySQLToSheetsWorker(
         syncState,
@@ -305,6 +319,51 @@ export class SyncOrchestrator {
       createdAt: row.created_at,
       updatedAt: row.updated_at
     }));
+  }
+
+  async getConflicts(sheetId: string): Promise<RowDataPacket[]> {
+    const syncState = await this.getSyncState(sheetId);
+    if (!syncState) {
+      throw new Error(`Sync configuration not found for sheet: ${sheetId}`);
+    }
+
+    const [rows] = await this.dbManager.getPool().query<RowDataPacket[]>(
+      `SELECT * FROM _sync_conflicts WHERE sync_state_id = ? ORDER BY created_at DESC`,
+      [syncState.id]
+    );
+
+    return rows;
+  }
+
+  async resolveConflict(
+    conflictId: number,
+    resolution: string,
+    resolvedData?: Record<string, unknown>,
+    resolvedBy: string = 'manual'
+  ): Promise<void> {
+    const allowedResolutions = new Set(['sheet_wins', 'db_wins', 'merged', 'manual']);
+    if (!allowedResolutions.has(resolution)) {
+      throw new Error(`Unsupported conflict resolution value: ${resolution}`);
+    }
+
+    const [result] = await this.dbManager.getPool().query<ResultSetHeader>(
+      `UPDATE _sync_conflicts 
+         SET resolution = ?,
+             resolved_data = ?,
+             resolved_at = NOW(6),
+             resolved_by = ?
+       WHERE id = ?`,
+      [
+        resolution,
+        resolvedData ? JSON.stringify(resolvedData) : null,
+        resolvedBy,
+        conflictId
+      ]
+    );
+
+    if (result.affectedRows === 0) {
+      throw new Error(`Conflict ${conflictId} not found`);
+    }
   }
 
   async triggerManualSync(sheetId: string): Promise<void> {

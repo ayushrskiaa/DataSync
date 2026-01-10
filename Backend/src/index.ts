@@ -67,7 +67,7 @@ class App {
     // API routes
     this.app.use('/api/sync', syncRoutes(this.syncOrchestrator));
     this.app.use('/api/tables', tableRoutes(this.dbManager));
-    this.app.use('/auth', authRoutes);
+    this.app.use('/api/auth', authRoutes);
 
     // Error handling
     this.app.use(errorHandler);

@@ -6,6 +6,21 @@ export class GoogleSheetsService {
   private sheets: sheets_v4.Sheets;
   private auth: any;
 
+  private static normalizeSheetName(name: string): string {
+    return name.trim().replace(/\s+/g, ' ').toLowerCase();
+  }
+
+  private static quoteSheetName(sheetName: string): string {
+    const normalized = sheetName.trim().replace(/\s+/g, ' ');
+    const escapedName = normalized.replace(/'/g, "''");
+    return `'${escapedName}'`;
+  }
+
+  static buildRange(sheetName: string, cellRange: string = 'A:ZZ'): string {
+    const trimmedRange = cellRange?.trim() || 'A:ZZ';
+    return `${GoogleSheetsService.quoteSheetName(sheetName)}!${trimmedRange}`;
+  }
+
   constructor() {
     this.auth = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
@@ -71,6 +86,26 @@ export class GoogleSheetsService {
       logger.error(`Failed to get spreadsheet info for ${spreadsheetId}`, error);
       throw error;
     }
+  }
+
+  async listSheetTitles(spreadsheetId: string): Promise<string[]> {
+    const info = await this.getSpreadsheetInfo(spreadsheetId);
+    return (info.sheets || [])
+      .map((sheet: any) => sheet.properties?.title)
+      .filter((title: string | undefined): title is string => Boolean(title));
+  }
+
+  async verifySheetExists(spreadsheetId: string, sheetName: string): Promise<string> {
+    const target = GoogleSheetsService.normalizeSheetName(sheetName || 'Sheet1');
+    const titles = await this.listSheetTitles(spreadsheetId);
+    const matched = titles.find(title => GoogleSheetsService.normalizeSheetName(title) === target);
+
+    if (!matched) {
+      const hint = titles.length > 0 ? titles.join(', ') : 'No sheets found';
+      throw new Error(`Sheet "${sheetName}" not found in spreadsheet. Available sheets: ${hint}`);
+    }
+
+    return matched;
   }
 
   // Read data from a sheet
@@ -184,7 +219,7 @@ export class GoogleSheetsService {
     try {
       await this.sheets.spreadsheets.values.append({
         spreadsheetId,
-        range: `${sheetName}!A:A`,
+        range: GoogleSheetsService.buildRange(sheetName, 'A:A'),
         valueInputOption: 'USER_ENTERED',
         insertDataOption: 'INSERT_ROWS',
         requestBody: {

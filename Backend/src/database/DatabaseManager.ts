@@ -258,6 +258,63 @@ export class DatabaseManager {
     logger.info(`Created change tracking triggers for table: ${tableName}`);
   }
 
+  async changeTrackingTriggersExist(tableName: string): Promise<boolean> {
+    const triggerNames = [
+      `${tableName}_after_insert`,
+      `${tableName}_after_update`,
+      `${tableName}_after_delete`
+    ];
+
+    const [rows] = await this.pool!.query<RowDataPacket[]>(
+      `SELECT TRIGGER_NAME FROM information_schema.TRIGGERS
+       WHERE TRIGGER_SCHEMA = ?
+         AND EVENT_OBJECT_TABLE = ?
+         AND TRIGGER_NAME IN (?, ?, ?)`,
+      [process.env.DB_NAME, tableName, ...triggerNames]
+    );
+
+    return rows.length === triggerNames.length;
+  }
+
+  async ensureChangeTrackingTriggers(tableName: string): Promise<void> {
+    const exists = await this.changeTrackingTriggersExist(tableName);
+    if (!exists) {
+      logger.warn(`Missing change tracking triggers for table: ${tableName}, recreating...`);
+      await this.createChangeTrackingTriggers(tableName);
+    }
+  }
+
+  async markLatestRowChangeSynced(
+    tableName: string,
+    rowId: string | number | null | undefined,
+    operation?: 'INSERT' | 'UPDATE' | 'DELETE'
+  ): Promise<void> {
+    if (rowId === null || rowId === undefined || rowId === '') {
+      return;
+    }
+
+    const params: (string | number)[] = [tableName, String(rowId)];
+    let operationClause = '';
+
+    if (operation) {
+      operationClause = ' AND operation = ?';
+      params.push(operation);
+    }
+
+    await this.pool!.query(
+      `UPDATE _sync_changelog SET synced = TRUE, sync_timestamp = NOW(6)
+       WHERE id IN (
+         SELECT id FROM (
+           SELECT id FROM _sync_changelog
+           WHERE table_name = ? AND row_id = ? AND synced = FALSE${operationClause}
+           ORDER BY timestamp DESC
+           LIMIT 1
+         ) AS recent_change
+       )`,
+      params
+    );
+  }
+
   // Drop triggers
   async dropChangeTrackingTriggers(tableName: string): Promise<void> {
     try {

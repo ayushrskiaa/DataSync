@@ -30,19 +30,19 @@ Use this checklist before starting the application.
 - [ ] Google Cloud project created
 - [ ] Google Sheets API enabled in project
 - [ ] OAuth 2.0 credentials created
-- [ ] Redirect URI configured: `http://localhost:3001/auth/google/callback`
-- [ ] Client ID copied to `Backend/src/.env`
-- [ ] Client Secret copied to `Backend/src/.env`
+- [ ] Redirect URI configured: `http://localhost:3001/api/auth/google/callback`
+- [ ] Client ID copied to `Backend/.env`
+- [ ] Client Secret copied to `Backend/.env`
 
 ## ✅ Configuration Files
 
-- [ ] `Backend/src/.env` exists
-- [ ] `Backend/src/.env` has valid `GOOGLE_CLIENT_ID`
-- [ ] `Backend/src/.env` has valid `GOOGLE_CLIENT_SECRET`
-- [ ] `Backend/src/.env` has `DB_HOST=localhost`
-- [ ] `Backend/src/.env` has `DB_PORT=3306`
-- [ ] `Backend/src/.env` has `REDIS_HOST=localhost`
-- [ ] `Backend/src/.env` has `REDIS_PORT=6379`
+- [ ] `Backend/.env` exists
+- [ ] `Backend/.env` has valid `GOOGLE_CLIENT_ID`
+- [ ] `Backend/.env` has valid `GOOGLE_CLIENT_SECRET`
+- [ ] `Backend/.env` has `DB_HOST=localhost`
+- [ ] `Backend/.env` has `DB_PORT=3307`
+- [ ] `Backend/.env` has `REDIS_HOST=localhost`
+- [ ] `Backend/.env` has `REDIS_PORT=6379`
 
 ## ✅ Port Availability
 
@@ -55,15 +55,15 @@ Test-NetConnection -ComputerName localhost -Port 3000
 # Check port 3001 (Backend)
 Test-NetConnection -ComputerName localhost -Port 3001
 
-# Check port 3306 (MySQL)
-Test-NetConnection -ComputerName localhost -Port 3306
+# Check port 3307 (MySQL)
+Test-NetConnection -ComputerName localhost -Port 3307
 
 # Check port 6379 (Redis)
 Test-NetConnection -ComputerName localhost -Port 6379
 ```
 
 **If ports are in use:**
-- Port 3306: Stop local MySQL service or change port in `docker-compose.yml`
+- Port 3307: Stop local MySQL service or change port in `docker-compose.yml`
 - Port 6379: Stop local Redis or change port in `docker-compose.yml`
 - Port 3000/3001: Kill the process or change port in application
 
@@ -71,7 +71,7 @@ Test-NetConnection -ComputerName localhost -Port 6379
 
 - [ ] Backend dependencies installed
   ```powershell
-  cd Backend/src
+  cd Backend
   npm install
   ```
 
@@ -83,7 +83,7 @@ Test-NetConnection -ComputerName localhost -Port 6379
 
 - [ ] Docker containers started
   ```powershell
-  cd Backend/src
+  cd Backend
   docker-compose up -d
   ```
 
@@ -103,7 +103,7 @@ Test-NetConnection -ComputerName localhost -Port 6379
 
 - [ ] Backend server started
   ```powershell
-  cd Backend/src
+  cd Backend
   npm run dev
   ```
   - Check console for "Server running on port 3001"
@@ -119,11 +119,11 @@ Test-NetConnection -ComputerName localhost -Port 6379
 
 ## ✅ Google Authentication
 
-- [ ] Visit http://localhost:3001/auth/google
+- [ ] Visit http://localhost:3001/api/auth/google
 - [ ] Google OAuth consent screen appears
 - [ ] Login successful
 - [ ] Refresh token received
-- [ ] Refresh token added to `Backend/src/.env` as `GOOGLE_REFRESH_TOKEN`
+- [ ] Refresh token added to `Backend/.env` as `GOOGLE_REFRESH_TOKEN`
 - [ ] Backend server restarted
 
 ## ✅ Test Sync
@@ -153,15 +153,15 @@ If any item fails, see [SETUP.md](SETUP.md) for detailed troubleshooting steps.
 
 **Port conflicts:**
 ```powershell
-# Find process using port 3306
-netstat -ano | findstr :3306
+# Find process using port 3307
+netstat -ano | findstr :3307
 # Kill it
 taskkill /PID <PID> /F
 ```
 
 **Containers not starting:**
 ```powershell
-cd Backend/src
+cd Backend
 docker-compose down -v
 docker-compose up -d
 ```
@@ -169,7 +169,7 @@ docker-compose up -d
 **Node modules issues:**
 ```powershell
 # Backend
-cd Backend/src
+cd Backend
 Remove-Item -Recurse -Force node_modules
 Remove-Item package-lock.json
 npm install
@@ -184,7 +184,7 @@ npm install
 **Backend errors:**
 ```powershell
 # Check logs
-Get-Content Backend/src/logs/combined.log -Tail 50
+Get-Content Backend/logs/combined.log -Tail 50
 ```
 
 **Frontend errors:**
@@ -209,11 +209,11 @@ Run the application:
 Or manually:
 ```powershell
 # Terminal 1: Start Docker
-cd Backend/src
+cd Backend
 docker-compose up -d
 
 # Terminal 2: Start Backend
-cd Backend/src
+cd Backend
 npm run dev
 
 # Terminal 3: Start Frontend

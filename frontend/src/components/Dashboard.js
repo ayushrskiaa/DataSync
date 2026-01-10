@@ -17,7 +17,7 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import PauseIcon from '@mui/icons-material/Pause';
 import DeleteIcon from '@mui/icons-material/Delete';
 import VisibilityIcon from '@mui/icons-material/Visibility';
-import axios from 'axios';
+import { apiClient } from '../api/client';
 
 const Dashboard = () => {
   const [syncs, setSyncs] = useState([]);
@@ -33,7 +33,7 @@ const Dashboard = () => {
 
   const loadSyncs = async () => {
     try {
-      const response = await axios.get('/api/sync/list');
+      const response = await apiClient.get('/api/sync/list');
       setSyncs(response.data.data);
       setError(null);
     } catch (err) {
@@ -46,7 +46,7 @@ const Dashboard = () => {
 
   const handlePause = async (sheetId) => {
     try {
-      await axios.post(`/api/sync/pause/${sheetId}`);
+      await apiClient.post(`/api/sync/pause/${sheetId}`);
       loadSyncs();
     } catch (err) {
       setError('Failed to pause sync');
@@ -56,7 +56,7 @@ const Dashboard = () => {
 
   const handleResume = async (sheetId) => {
     try {
-      await axios.post(`/api/sync/resume/${sheetId}`);
+      await apiClient.post(`/api/sync/resume/${sheetId}`);
       loadSyncs();
     } catch (err) {
       setError('Failed to resume sync');
@@ -67,7 +67,7 @@ const Dashboard = () => {
   const handleDelete = async (sheetId) => {
     if (window.confirm('Are you sure you want to delete this sync configuration?')) {
       try {
-        await axios.delete(`/api/sync/${sheetId}`);
+        await apiClient.delete(`/api/sync/${sheetId}`);
         loadSyncs();
       } catch (err) {
         setError('Failed to delete sync');

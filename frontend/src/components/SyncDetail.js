@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   Container,
@@ -19,12 +19,20 @@ import {
   Chip,
   CircularProgress,
   Tabs,
-  Tab
+  Tab,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  TextField
 } from '@mui/material';
 import SyncIcon from '@mui/icons-material/Sync';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { io } from 'socket.io-client';
-import axios from 'axios';
+import { apiClient } from '../api/client';
+import { WS_BASE_URL } from '../config';
+
+const EXCLUDED_COLUMNS = ['created_at', 'updated_at'];
 
 const SyncDetail = () => {
   const { sheetId } = useParams();
@@ -34,22 +42,89 @@ const SyncDetail = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [liveUpdates, setLiveUpdates] = useState([]);
-  const [socket, setSocket] = useState(null);
   const [tabValue, setTabValue] = useState(0);
+  const [tableSchema, setTableSchema] = useState(null);
+  const [addRowDialogOpen, setAddRowDialogOpen] = useState(false);
+  const [newRowData, setNewRowData] = useState({});
+  const [addingRow, setAddingRow] = useState(false);
+  const [addRowError, setAddRowError] = useState(null);
 
-  useEffect(() => {
-    loadSyncDetails();
-    setupWebSocket();
+  const isAutoIncrement = (column) => (column.extra || '').toLowerCase().includes('auto_increment');
 
-    return () => {
-      if (socket) {
-        socket.disconnect();
-      }
-    };
+  const columnsToDisplay = useMemo(() => {
+    if (tableSchema) {
+      return tableSchema.columns
+        .map((col) => col.name)
+        .filter((name) => !EXCLUDED_COLUMNS.includes(name));
+    }
+
+    if (tableData.length > 0) {
+      return Object.keys(tableData[0]).filter((key) => !EXCLUDED_COLUMNS.includes(key));
+    }
+
+    return [];
+  }, [tableSchema, tableData]);
+
+  const editableColumns = useMemo(() => {
+    if (!tableSchema) return [];
+
+    return tableSchema.columns.filter((col) => {
+      if (EXCLUDED_COLUMNS.includes(col.name)) return false;
+      if (isAutoIncrement(col)) return false;
+      return true;
+    });
+  }, [tableSchema]);
+
+  const loadTableData = useCallback(async (tableName) => {
+    try {
+      const table = tableName || syncState?.tableName;
+      if (!table) return;
+
+      const response = await apiClient.get(`/api/tables/${table}/data?limit=50`);
+      setTableData(response.data.data);
+    } catch (err) {
+      console.error('Failed to load table data', err);
+    }
+  }, [syncState?.tableName]);
+
+  const loadTableSchema = useCallback(async (tableName) => {
+    try {
+      const table = tableName || syncState?.tableName;
+      if (!table) return;
+
+      const response = await apiClient.get(`/api/tables/${table}/schema`);
+      setTableSchema(response.data.data);
+    } catch (err) {
+      console.error('Failed to load table schema', err);
+    }
+  }, [syncState?.tableName]);
+
+  const loadConflicts = useCallback(async () => {
+    try {
+      const response = await apiClient.get(`/api/sync/conflicts/${sheetId}`);
+      setConflicts(response.data.data);
+    } catch (err) {
+      console.error('Failed to load conflicts', err);
+    }
   }, [sheetId]);
 
-  const setupWebSocket = () => {
-    const newSocket = io('http://localhost:3001');
+  const loadSyncDetails = useCallback(async () => {
+    try {
+      const response = await apiClient.get(`/api/sync/status/${sheetId}`);
+      setSyncState(response.data.data);
+      await loadTableSchema(response.data.data.tableName);
+      await loadTableData(response.data.data.tableName);
+      await loadConflicts();
+    } catch (err) {
+      setError('Failed to load sync details');
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  }, [sheetId, loadTableData, loadTableSchema, loadConflicts]);
+
+  const setupWebSocket = useCallback(() => {
+    const newSocket = io(WS_BASE_URL);
     
     newSocket.on('connect', () => {
       console.log('WebSocket connected');
@@ -61,7 +136,7 @@ const SyncDetail = () => {
       setLiveUpdates(prev => [{
         ...data,
         id: Date.now()
-      }, ...prev.slice(0, 9)]); // Keep last 10 updates
+      }, ...prev.slice(0, 9)]);
       loadTableData();
     });
 
@@ -74,47 +149,23 @@ const SyncDetail = () => {
       loadConflicts();
     });
 
-    setSocket(newSocket);
-  };
+    return newSocket;
+  }, [sheetId, loadTableData, loadConflicts]);
 
-  const loadSyncDetails = async () => {
-    try {
-      const response = await axios.get(`/api/sync/status/${sheetId}`);
-      setSyncState(response.data.data);
-      await loadTableData(response.data.data.tableName);
-      await loadConflicts();
-    } catch (err) {
-      setError('Failed to load sync details');
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  useEffect(() => {
+    loadSyncDetails();
+    const activeSocket = setupWebSocket();
 
-  const loadTableData = async (tableName) => {
-    try {
-      const table = tableName || syncState?.tableName;
-      if (!table) return;
-
-      const response = await axios.get(`/api/tables/${table}/data?limit=50`);
-      setTableData(response.data.data);
-    } catch (err) {
-      console.error('Failed to load table data', err);
-    }
-  };
-
-  const loadConflicts = async () => {
-    try {
-      const response = await axios.get(`/api/sync/conflicts/${sheetId}`);
-      setConflicts(response.data.data);
-    } catch (err) {
-      console.error('Failed to load conflicts', err);
-    }
-  };
+    return () => {
+      if (activeSocket) {
+        activeSocket.disconnect();
+      }
+    };
+  }, [loadSyncDetails, setupWebSocket]);
 
   const handleTriggerSync = async () => {
     try {
-      await axios.post(`/api/sync/trigger/${sheetId}`);
+      await apiClient.post(`/api/sync/trigger/${sheetId}`);
       setLiveUpdates(prev => [{
         source: 'manual',
         changeCount: 0,
@@ -124,6 +175,88 @@ const SyncDetail = () => {
     } catch (err) {
       setError('Failed to trigger sync');
       console.error(err);
+    }
+  };
+
+  const handleOpenAddRowDialog = () => {
+    if (!editableColumns.length) return;
+    const initialValues = editableColumns.reduce((acc, column) => {
+      acc[column.name] = '';
+      return acc;
+    }, {});
+    setNewRowData(initialValues);
+    setAddRowError(null);
+    setAddRowDialogOpen(true);
+  };
+
+  const handleCloseAddRowDialog = () => {
+    setAddRowDialogOpen(false);
+    setNewRowData({});
+    setAddRowError(null);
+  };
+
+  const handleNewRowFieldChange = (field) => (event) => {
+    const value = event.target.value;
+    setNewRowData(prev => ({
+      ...prev,
+      [field]: value
+    }));
+  };
+
+  const parseValueForColumn = (column, rawValue) => {
+    if (rawValue === '' || rawValue === null || rawValue === undefined) {
+      return undefined;
+    }
+
+    const lowerType = (column.type || '').toLowerCase();
+    const numericTokens = ['int', 'decimal', 'float', 'double', 'tinyint', 'smallint', 'mediumint', 'bigint'];
+
+    if (numericTokens.some(token => lowerType.includes(token))) {
+      const numericValue = Number(rawValue);
+      if (Number.isNaN(numericValue)) {
+        throw new Error(`Value for ${column.name} must be a valid number`);
+      }
+      return numericValue;
+    }
+
+    return rawValue;
+  };
+
+  const handleSubmitNewRow = async () => {
+    if (!syncState?.tableName) return;
+    setAddingRow(true);
+    setAddRowError(null);
+
+    try {
+      const payload = {};
+
+      editableColumns.forEach(column => {
+        const rawValue = newRowData[column.name];
+        if (rawValue === '' || rawValue === null || rawValue === undefined) {
+          return;
+        }
+
+        const parsedValue = parseValueForColumn(column, rawValue);
+        if (parsedValue !== undefined) {
+          payload[column.name] = parsedValue;
+        }
+      });
+
+      if (Object.keys(payload).length === 0) {
+        setAddRowError('Please provide at least one value before saving.');
+        setAddingRow(false);
+        return;
+      }
+
+      await apiClient.post(`/api/tables/${syncState.tableName}/rows`, payload);
+      setAddRowDialogOpen(false);
+      setNewRowData({});
+      await loadTableData(syncState.tableName);
+    } catch (err) {
+      setAddRowError(err.response?.data?.error || 'Failed to add row');
+      console.error('Failed to add row', err);
+    } finally {
+      setAddingRow(false);
     }
   };
 
@@ -181,6 +314,14 @@ const SyncDetail = () => {
               onClick={loadSyncDetails}
             >
               Refresh Data
+            </Button>
+            <Button
+              variant="outlined"
+              color="secondary"
+              onClick={handleOpenAddRowDialog}
+              disabled={!tableSchema || editableColumns.length === 0}
+            >
+              Add Row
             </Button>
           </Box>
         </CardContent>
@@ -258,21 +399,31 @@ const SyncDetail = () => {
                   <Table stickyHeader size="small">
                     <TableHead>
                       <TableRow>
-                        {tableData.length > 0 && Object.keys(tableData[0]).map((key) => (
+                        {columnsToDisplay.map((key) => (
                           <TableCell key={key}><strong>{key}</strong></TableCell>
                         ))}
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {tableData.map((row, idx) => (
-                        <TableRow key={idx}>
-                          {Object.values(row).map((value, i) => (
-                            <TableCell key={i}>
-                              {value === null ? <em>null</em> : String(value)}
-                            </TableCell>
-                          ))}
+                      {tableData.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={(columnsToDisplay.length || 1)}>
+                            <Typography variant="body2" color="text.secondary">
+                              No data available
+                            </Typography>
+                          </TableCell>
                         </TableRow>
-                      ))}
+                      ) : (
+                        tableData.map((row, idx) => (
+                          <TableRow key={idx}>
+                            {columnsToDisplay.map((key) => (
+                              <TableCell key={key}>
+                                {row[key] === null || row[key] === undefined ? <em>null</em> : String(row[key])}
+                              </TableCell>
+                            ))}
+                          </TableRow>
+                        ))
+                      )}
                     </TableBody>
                   </Table>
                 </TableContainer>
@@ -314,6 +465,52 @@ const SyncDetail = () => {
           </Card>
         </Grid>
       </Grid>
+
+      <Dialog
+        open={addRowDialogOpen}
+        onClose={handleCloseAddRowDialog}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>Add Row</DialogTitle>
+        <DialogContent dividers>
+          {editableColumns.length === 0 ? (
+            <Typography variant="body2" color="text.secondary">
+              No editable columns are available for this table.
+            </Typography>
+          ) : (
+            editableColumns.map((column) => (
+              <TextField
+                key={column.name}
+                label={column.name}
+                margin="dense"
+                fullWidth
+                value={newRowData[column.name] ?? ''}
+                onChange={handleNewRowFieldChange(column.name)}
+                helperText={`Type: ${column.type}${column.nullable ? '' : ' • Required'}`}
+              />
+            ))
+          )}
+
+          {addRowError && (
+            <Alert severity="error" sx={{ mt: 2 }} onClose={() => setAddRowError(null)}>
+              {addRowError}
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseAddRowDialog} disabled={addingRow}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleSubmitNewRow}
+            variant="contained"
+            disabled={addingRow || editableColumns.length === 0}
+          >
+            {addingRow ? <CircularProgress size={20} /> : 'Save Row'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Container>
   );
 };

@@ -172,7 +172,7 @@ This will:
 
 ```bash
 # Navigate to backend
-cd Backend/src
+cd Backend
 
 # Install dependencies
 npm install
@@ -206,8 +206,9 @@ cd frontend
 npm install
 
 # Configure environment
-echo "REACT_APP_API_URL=http://localhost:3001" > .env
-echo "REACT_APP_WS_URL=ws://localhost:3001" >> .env
+# Configure environment
+cp .env.example .env
+# Edit .env if you need to override defaults
 
 # Start development server
 npm start
@@ -222,7 +223,7 @@ See [frontend/README.md](frontend/README.md) for detailed setup.
 1. Go to [Google Cloud Console](https://console.cloud.google.com/)
 2. Create project → Enable **Google Sheets API**
 3. Create **OAuth 2.0 Client ID** (Web application)
-4. Add redirect URI: `http://localhost:3001/api/auth/callback`
+4. Add redirect URI: `http://localhost:3001/api/auth/google/callback`
 5. Copy Client ID and Secret to backend `.env`
 
 ## 🧪 Testing the System

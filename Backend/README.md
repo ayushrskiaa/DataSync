@@ -58,7 +58,7 @@ FRONTEND_URL=http://localhost:3000
 
 # MySQL
 DB_HOST=localhost
-DB_PORT=3306
+DB_PORT=3307
 DB_USER=superjoin_user
 DB_PASSWORD=superjoin_pass
 DB_NAME=superjoin_db
@@ -70,7 +70,7 @@ REDIS_PORT=6379
 # Google OAuth
 GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-client-secret
-GOOGLE_REDIRECT_URI=http://localhost:3001/auth/google/callback
+GOOGLE_REDIRECT_URI=http://localhost:3001/api/auth/google/callback
 GOOGLE_REFRESH_TOKEN=your-refresh-token
 
 # Sync Configuration
@@ -89,7 +89,7 @@ LOG_LEVEL=info
 3. Enable **Google Sheets API**
 4. Go to **Credentials** → **Create Credentials** → **OAuth 2.0 Client ID**
 5. Application type: **Web application**
-6. Authorized redirect URIs: `http://localhost:3001/auth/google/callback`
+6. Authorized redirect URIs: `http://localhost:3001/api/auth/google/callback`
 7. Download credentials and add to `.env`
 
 ### 4. Start Infrastructure
