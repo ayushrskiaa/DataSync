@@ -277,10 +277,20 @@ export class DatabaseManager {
   }
 
   async ensureChangeTrackingTriggers(tableName: string): Promise<void> {
-    const exists = await this.changeTrackingTriggersExist(tableName);
-    if (!exists) {
-      logger.warn(`Missing change tracking triggers for table: ${tableName}, recreating...`);
-      await this.createChangeTrackingTriggers(tableName);
+    try {
+      const exists = await this.changeTrackingTriggersExist(tableName);
+      if (!exists) {
+        logger.warn(`Missing change tracking triggers for table: ${tableName}, recreating...`);
+        await this.createChangeTrackingTriggers(tableName);
+      }
+    } catch (error: any) {
+      // If trigger operations fail, log but don't crash the app
+      if (error.code === 'ER_BINLOG_CREATE_ROUTINE_NEED_SUPER' || error.errno === 1419) {
+        logger.warn(`Could not ensure triggers for ${tableName} due to database privileges. Continuing without triggers.`);
+      } else {
+        logger.error(`Error ensuring triggers for ${tableName}`, error);
+      }
+      // Don't re-throw - allow app to continue without triggers
     }
   }
 
