@@ -2,6 +2,7 @@ services:
   mysql:
     image: mysql:8.0
     container_name: superjoin-mysql
+    command: --log_bin_trust_function_creators=1
     environment:
       MYSQL_ROOT_PASSWORD: rootpassword
       MYSQL_DATABASE: superjoin_db
