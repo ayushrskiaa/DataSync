@@ -86,15 +86,16 @@ export class SyncOrchestrator {
       if (!tables.includes(config.tableName)) {
         logger.info(`Table ${config.tableName} does not exist, creating from sheet headers...`);
         
-        // Read sheet headers
+        // Read sheet headers directly using Google Sheets API
         const range = GoogleSheetsService.buildRange(canonicalSheetName, 'A1:ZZ1');
-        const sheetData = await this.googleSheets.readSheet(config.sheetId, range);
+        const response = await this.googleSheets.readSheet(config.sheetId, range);
         
-        if (!sheetData || !sheetData.values || sheetData.values.length === 0 || !sheetData.values[0]) {
+        // The readSheet method extracts headers, so check the headers field
+        if (!response || !response.headers || response.headers.length === 0) {
           throw new Error('Sheet is empty or has no headers. Please add column headers in the first row.');
         }
 
-        const headers = sheetData.values[0].filter((h: any) => h && h.toString().trim() !== '');
+        const headers = response.headers.filter((h: any) => h && h.toString().trim() !== '');
         if (headers.length === 0) {
           throw new Error('No valid headers found in sheet. Please add column names in the first row.');
         }
