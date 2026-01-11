@@ -69,12 +69,6 @@ export class SyncOrchestrator {
     try {
       const requestedSheetName = (config.sheetName || 'Sheet1').trim();
 
-      // Validate table exists
-      const tables = await this.dbManager.listTables();
-      if (!tables.includes(config.tableName)) {
-        throw new Error(`Table ${config.tableName} does not exist`);
-      }
-
       // Validate sheet access and capture canonical sheet title
       const canonicalSheetName = await this.googleSheets.verifySheetExists(
         config.sheetId,
@@ -85,6 +79,28 @@ export class SyncOrchestrator {
       const existing = await this.getSyncState(config.sheetId);
       if (existing) {
         throw new Error(`Sync already configured for sheet: ${config.sheetId}`);
+      }
+
+      // Check if table exists, if not create it from sheet headers
+      const tables = await this.dbManager.listTables();
+      if (!tables.includes(config.tableName)) {
+        logger.info(`Table ${config.tableName} does not exist, creating from sheet headers...`);
+        
+        // Read sheet headers
+        const range = GoogleSheetsService.buildRange(canonicalSheetName, 'A1:ZZ1');
+        const sheetData = await this.googleSheets.readSheet(config.sheetId, range);
+        
+        if (!sheetData || !sheetData.values || sheetData.values.length === 0 || !sheetData.values[0]) {
+          throw new Error('Sheet is empty or has no headers. Please add column headers in the first row.');
+        }
+
+        const headers = sheetData.values[0].filter((h: any) => h && h.toString().trim() !== '');
+        if (headers.length === 0) {
+          throw new Error('No valid headers found in sheet. Please add column names in the first row.');
+        }
+
+        // Create table from headers
+        await this.dbManager.createTableFromHeaders(config.tableName, headers);
       }
 
       // Create sync state in database
@@ -114,8 +130,8 @@ export class SyncOrchestrator {
         throw new Error('Failed to create sync state');
       }
 
-      // Initial sync: Copy MySQL data to Google Sheets
-      await this.performInitialSync(syncState);
+      // Initial sync: Copy sheet data to MySQL (reverse direction for new tables)
+      await this.performInitialSync(syncState, true);
 
       // Start sync workers
       await this.startSyncWorkers(syncState);
@@ -132,37 +148,84 @@ export class SyncOrchestrator {
     }
   }
 
-  private async performInitialSync(syncState: SyncState): Promise<void> {
+  private async performInitialSync(syncState: SyncState, fromSheet: boolean = false): Promise<void> {
     logger.info(`Performing initial sync for ${syncState.sheetId}`);
 
     try {
-      // Get table schema and data
-      const schema = await this.dbManager.getTableSchema(syncState.tableName);
-      const data = await this.dbManager.getTableData(syncState.tableName);
-      const primaryKey = schema.primaryKey[0] || 'id';
+      if (fromSheet) {
+        // New flow: Copy from Sheet to MySQL (for newly created tables)
+        const range = GoogleSheetsService.buildRange(syncState.sheetName, 'A:ZZ');
+        const sheetData = await this.googleSheets.readSheet(syncState.sheetId, range);
+        
+        if (!sheetData || !sheetData.values || sheetData.values.length < 2) {
+          logger.info('Sheet has no data rows to sync');
+          return;
+        }
 
-      const headers = schema.columns
-        .filter(col => !EXCLUDED_COLUMNS.has(col.name) || col.name === primaryKey)
-        .map(col => col.name);
+        const headers = sheetData.values[0];
+        const dataRows = sheetData.values.slice(1);
 
-      // Format data
-      const formattedData = this.googleSheets.formatDataForSheets(data, headers);
+        // Get table schema to validate columns
+        const schema = await this.dbManager.getTableSchema(syncState.tableName);
+        const tableColumns = new Set(schema.columns.map(c => c.name.toLowerCase()));
 
-      // Clear existing data in sheet
-      await this.googleSheets.clearRange(
-        syncState.sheetId,
-        GoogleSheetsService.buildRange(syncState.sheetName, 'A:ZZ')
-      );
+        let syncedCount = 0;
+        for (const row of dataRows) {
+          // Skip empty rows
+          if (row.every((cell: any) => !cell || cell.toString().trim() === '')) {
+            continue;
+          }
 
-      // Write headers and data
-      const values = [headers, ...formattedData];
-      await this.googleSheets.writeSheet(
-        syncState.sheetId,
-        GoogleSheetsService.buildRange(syncState.sheetName, 'A1'),
-        values
-      );
+          // Build row data
+          const rowData: Record<string, any> = {};
+          for (let i = 0; i < headers.length && i < row.length; i++) {
+            const columnName = headers[i]?.toString().replace(/[^a-zA-Z0-9_]/g, '_');
+            if (columnName && tableColumns.has(columnName.toLowerCase()) && columnName.toLowerCase() !== 'id') {
+              rowData[columnName] = row[i] || null;
+            }
+          }
 
-      logger.info(`Initial sync complete: ${data.length} rows synced to Google Sheets`);
+          // Insert row if we have data
+          if (Object.keys(rowData).length > 0) {
+            try {
+              await this.dbManager.insertRow(syncState.tableName, rowData);
+              syncedCount++;
+            } catch (error) {
+              logger.warn(`Failed to insert row during initial sync:`, error);
+            }
+          }
+        }
+
+        logger.info(`Initial sync complete: ${syncedCount} rows synced from Google Sheet to MySQL`);
+      } else {
+        // Original flow: Copy from MySQL to Sheet (for existing tables)
+        const schema = await this.dbManager.getTableSchema(syncState.tableName);
+        const data = await this.dbManager.getTableData(syncState.tableName);
+        const primaryKey = schema.primaryKey[0] || 'id';
+
+        const headers = schema.columns
+          .filter(col => !EXCLUDED_COLUMNS.has(col.name) || col.name === primaryKey)
+          .map(col => col.name);
+
+        // Format data
+        const formattedData = this.googleSheets.formatDataForSheets(data, headers);
+
+        // Clear existing data in sheet
+        await this.googleSheets.clearRange(
+          syncState.sheetId,
+          GoogleSheetsService.buildRange(syncState.sheetName, 'A:ZZ')
+        );
+
+        // Write headers and data
+        const values = [headers, ...formattedData];
+        await this.googleSheets.writeSheet(
+          syncState.sheetId,
+          GoogleSheetsService.buildRange(syncState.sheetName, 'A1'),
+          values
+        );
+
+        logger.info(`Initial sync complete: ${data.length} rows synced to Google Sheets`);
+      }
     } catch (error) {
       logger.error('Initial sync failed', error);
       throw error;

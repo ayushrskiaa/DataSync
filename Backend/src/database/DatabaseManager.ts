@@ -85,6 +85,45 @@ export class DatabaseManager {
     return rows.map(row => row.TABLE_NAME);
   }
 
+  // Create table from sheet headers
+  async createTableFromHeaders(tableName: string, headers: string[]): Promise<void> {
+    // Validate table name (alphanumeric and underscores only)
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(tableName)) {
+      throw new Error('Invalid table name. Use only letters, numbers, and underscores.');
+    }
+
+    // Check if table already exists
+    const tables = await this.listTables();
+    if (tables.includes(tableName)) {
+      throw new Error(`Table ${tableName} already exists`);
+    }
+
+    // Build column definitions
+    const columnDefs: string[] = [
+      '`id` INT AUTO_INCREMENT PRIMARY KEY'
+    ];
+
+    for (const header of headers) {
+      if (header.toLowerCase() === 'id') continue; // Skip if header is 'id'
+      
+      const columnName = header.replace(/[^a-zA-Z0-9_]/g, '_'); // Sanitize column name
+      columnDefs.push(`${mysql.escapeId(columnName)} TEXT`);
+    }
+
+    // Add timestamp columns
+    columnDefs.push('`created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP');
+    columnDefs.push('`updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP');
+
+    const createTableSQL = `
+      CREATE TABLE ${mysql.escapeId(tableName)} (
+        ${columnDefs.join(',\n        ')}
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `;
+
+    await this.pool!.query(createTableSQL);
+    logger.info(`Created table ${tableName} with ${headers.length} columns`);
+  }
+
   // Get table schema with column definitions
   async getTableSchema(tableName: string): Promise<TableSchema> {
     const [columns] = await this.pool!.query<RowDataPacket[]>(

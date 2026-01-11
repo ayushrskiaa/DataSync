@@ -87,14 +87,23 @@ export class SheetsToMySQLWorker {
       const primaryKey = schema.primaryKey[0] || "id";
       const schemaColumns = schema.columns.map(col => col.name);
 
+      // Check if primary key column exists in sheet
       const primaryKeyColumnIndex = sheetData.headers.findIndex(header => header === primaryKey);
-      if (primaryKeyColumnIndex === -1) {
+      
+      // Check if primary key is auto-increment (doesn't need to be in sheet)
+      const pkColumn = schema.columns.find(col => col.name === primaryKey);
+      const isAutoIncrement = pkColumn?.extra.toLowerCase().includes('auto_increment');
+      
+      if (primaryKeyColumnIndex === -1 && !isAutoIncrement) {
         throw new Error(
           `Primary key column "${primaryKey}" is missing from sheet "${this.syncState.sheetName}". ` +
             "Column names must exactly match the database schema."
         );
       }
-      const primaryKeyColumnLetter = this.columnToLetter(primaryKeyColumnIndex + 1);
+      
+      const primaryKeyColumnLetter = primaryKeyColumnIndex !== -1 
+        ? this.columnToLetter(primaryKeyColumnIndex + 1)
+        : null;
 
       const cachedSnapshot = await this.redisClient.getCache<SheetSnapshot>(
         `sheet_snapshot_${this.syncState.sheetId}`
@@ -242,7 +251,7 @@ export class SheetsToMySQLWorker {
         await connection.commit();
         await this.storeSnapshot(currentData);
 
-        if (pendingPrimaryKeyUpdates.length > 0) {
+        if (pendingPrimaryKeyUpdates.length > 0 && primaryKeyColumnLetter) {
           const updates = pendingPrimaryKeyUpdates.map(update => ({
             range: GoogleSheetsService.buildRange(
               this.syncState.sheetName,
