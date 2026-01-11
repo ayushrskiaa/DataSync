@@ -1,0 +1,50 @@
+services:
+  - type: web
+    name: superjoin-backend
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    rootDir: Backend
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DB_HOST
+        fromDatabase:
+          name: superjoin-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: superjoin-db
+          property: port
+      - key: DB_USER
+        fromDatabase:
+          name: superjoin-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: superjoin-db
+          property: password
+      - key: DB_NAME
+        fromDatabase:
+          name: superjoin-db
+          property: database
+      - key: REDIS_HOST
+        fromService:
+          name: superjoin-redis
+          type: redis
+          property: host
+      - key: REDIS_PORT
+        fromService:
+          name: superjoin-redis
+          type: redis
+          property: port
+
+  - type: redis
+    name: superjoin-redis
+    plan: free
+    maxmemoryPolicy: noeviction
+
+databases:
+  - name: superjoin-db
+    plan: free
