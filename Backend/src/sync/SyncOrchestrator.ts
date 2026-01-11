@@ -95,8 +95,18 @@ export class SyncOrchestrator {
         [config.sheetId, canonicalSheetName, config.tableName, config.conflictResolution]
       );
 
-      // Create change tracking triggers
-      await this.dbManager.createChangeTrackingTriggers(config.tableName);
+      // Create change tracking triggers (optional - fails on free tier DBs)
+      try {
+        await this.dbManager.createChangeTrackingTriggers(config.tableName);
+      } catch (error: any) {
+        // Triggers are nice-to-have but not required - we can use polling instead
+        if (error.code === 'ER_BINLOG_CREATE_ROUTINE_NEED_SUPER' || error.errno === 1419) {
+          logger.warn(`Could not create triggers for ${config.tableName} - will use polling for change detection`);
+        } else {
+          // For other errors, log but continue (don't fail sync creation)
+          logger.warn(`Trigger creation warning for ${config.tableName}:`, error.message);
+        }
+      }
 
       // Get the created sync state
       const syncState = await this.getSyncState(config.sheetId);
