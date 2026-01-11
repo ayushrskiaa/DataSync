@@ -1,0 +1,53 @@
+# Fly.io configuration
+app = "superjoin-backend"
+primary_region = "sin" # Singapore - change to your nearest region
+
+[build]
+  dockerfile = "Backend/Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "8080"
+  SYNC_INTERVAL_MS = "2000"
+  MAX_RETRIES = "3"
+  BATCH_SIZE = "100"
+  LOG_LEVEL = "info"
+
+[[services]]
+  internal_port = 3001
+  protocol = "tcp"
+
+  [[services.ports]]
+    handlers = ["http"]
+    port = 80
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443
+
+  [services.concurrency]
+    hard_limit = 25
+    soft_limit = 20
+    type = "connections"
+
+  [[services.tcp_checks]]
+    grace_period = "10s"
+    interval = "15s"
+    restart_limit = 0
+    timeout = "2s"
+
+  [[services.http_checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/health"
+    protocol = "http"
+    restart_limit = 0
+    timeout = "5s"
+    tls_skip_verify = false
+
+# Resource sizing
+[vm]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1
