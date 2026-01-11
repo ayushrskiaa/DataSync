@@ -12,7 +12,11 @@ import {
   InputLabel,
   Select,
   MenuItem,
-  CircularProgress
+  CircularProgress,
+  Radio,
+  RadioGroup,
+  FormControlLabel,
+  FormLabel
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import { apiClient } from '../api/client';
@@ -23,6 +27,7 @@ const ConfigureSync = () => {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(false);
+  const [tableOption, setTableOption] = useState('existing'); // 'existing' or 'new'
   const navigate = useNavigate();
 
   const [formData, setFormData] = useState({
@@ -52,6 +57,16 @@ const ConfigureSync = () => {
     setFormData({
       ...formData,
       [e.target.name]: e.target.value
+    });
+  };
+
+  const handleTableOptionChange = (e) => {
+    const newOption = e.target.value;
+    setTableOption(newOption);
+    // Clear table name when switching options
+    setFormData({
+      ...formData,
+      tableName: ''
     });
   };
 
@@ -129,21 +144,55 @@ const ConfigureSync = () => {
               helperText="The name of the tab/sheet (default: Sheet1)"
             />
 
-            <FormControl fullWidth sx={{ mb: 2 }} required>
-              <InputLabel>MySQL Table</InputLabel>
-              <Select
+            <FormControl component="fieldset" sx={{ mb: 2 }}>
+              <FormLabel component="legend">MySQL Table Option</FormLabel>
+              <RadioGroup
+                row
+                value={tableOption}
+                onChange={handleTableOptionChange}
+              >
+                <FormControlLabel 
+                  value="existing" 
+                  control={<Radio />} 
+                  label="Use Existing Table" 
+                />
+                <FormControlLabel 
+                  value="new" 
+                  control={<Radio />} 
+                  label="Create New Table from Sheet" 
+                />
+              </RadioGroup>
+            </FormControl>
+
+            {tableOption === 'existing' ? (
+              <FormControl fullWidth sx={{ mb: 2 }} required>
+                <InputLabel>MySQL Table</InputLabel>
+                <Select
+                  name="tableName"
+                  value={formData.tableName}
+                  onChange={handleChange}
+                  label="MySQL Table"
+                >
+                  {tables.map((table) => (
+                    <MenuItem key={table} value={table}>
+                      {table}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            ) : (
+              <TextField
+                fullWidth
+                label="New Table Name"
                 name="tableName"
                 value={formData.tableName}
                 onChange={handleChange}
-                label="MySQL Table"
-              >
-                {tables.map((table) => (
-                  <MenuItem key={table} value={table}>
-                    {table}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+                required
+                sx={{ mb: 2 }}
+                helperText="Table will be created automatically from your sheet headers (use lowercase, underscores only)"
+                placeholder="e.g., products, customers, orders"
+              />
+            )}
 
             <FormControl fullWidth sx={{ mb: 3 }}>
               <InputLabel>Conflict Resolution Strategy</InputLabel>
@@ -167,7 +216,11 @@ const ConfigureSync = () => {
               <ul style={{ marginTop: 0, paddingLeft: 20 }}>
                 <li>Make sure you have configured Google Sheets API credentials</li>
                 <li>The Google Sheet must be accessible with your credentials</li>
-                <li>Initial sync will copy all MySQL data to Google Sheets</li>
+                {tableOption === 'existing' ? (
+                  <li>Initial sync will copy all MySQL data to Google Sheets</li>
+                ) : (
+                  <li>Add column headers in row 1 of your sheet (e.g., name, email, age)</li>
+                )}
                 <li>Changes in either system will sync automatically (2s interval)</li>
               </ul>
             </Alert>
@@ -218,7 +271,12 @@ const ConfigureSync = () => {
           </ul>
 
           <Typography variant="body2" paragraph>
-            <strong>3. Select Table:</strong> Choose any existing MySQL table from the dropdown
+            <strong>3. Select Table:</strong> Choose an existing MySQL table OR create a new one from your sheet
+          </Typography>
+          
+          <Typography variant="body2" paragraph sx={{ pl: 2, fontSize: '0.85rem' }}>
+            • <strong>Existing Table:</strong> Copies MySQL data to your sheet<br/>
+            • <strong>New Table:</strong> Creates MySQL table from your sheet headers (row 1)
           </Typography>
 
           <Typography variant="body2">
