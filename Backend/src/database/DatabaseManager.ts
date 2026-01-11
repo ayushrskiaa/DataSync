@@ -25,10 +25,12 @@ export class DatabaseManager {
         password: process.env.DB_PASSWORD || '',
         database: process.env.DB_NAME || 'superjoin_db',
         waitForConnections: true,
-        connectionLimit: 10,
+        connectionLimit: 3, // Reduced from 10 to 3 for free tier DB (max 5 connections)
         queueLimit: 0,
         enableKeepAlive: true,
-        keepAliveInitialDelay: 0
+        keepAliveInitialDelay: 0,
+        maxIdle: 2, // Keep 2 idle connections max
+        idleTimeout: 30000 // Release idle connections after 30s
       });
 
       // Test connection
