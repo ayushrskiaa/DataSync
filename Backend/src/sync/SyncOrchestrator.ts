@@ -176,7 +176,12 @@ export class SyncOrchestrator {
     }
 
     try {
-      await this.dbManager.ensureChangeTrackingTriggers(syncState.tableName);
+      // Try to ensure triggers exist, but don't fail if we can't create them
+      try {
+        await this.dbManager.ensureChangeTrackingTriggers(syncState.tableName);
+      } catch (triggerError) {
+        logger.warn(`Could not ensure triggers for ${syncState.tableName}, continuing without them`);
+      }
 
       // Create workers
       const mysqlWorker = new MySQLToSheetsWorker(
