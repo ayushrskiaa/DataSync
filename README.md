@@ -154,8 +154,8 @@ Superjoin/
 
 ### Live Production Version
 
-**Backend**: [https://datasync-0wv9.onrender.com](https://datasync-0wv9.onrender.com)  
-**Frontend**: Deploy to Vercel (see deployment section)
+
+**Frontend**: https://datasync-frontend.onrender.com/
 
 The backend is already deployed and running with:
 - Clever Cloud MySQL (256MB free tier)
