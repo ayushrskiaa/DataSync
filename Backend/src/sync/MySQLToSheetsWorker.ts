@@ -76,7 +76,9 @@ export class MySQLToSheetsWorker {
       );
 
       if (changes.length === 0) {
-        return; // Nothing to sync
+        // ⚠️ CRITICAL: No triggers available - use polling fallback
+        await this.pollingBasedSync();
+        return;
       }
 
       logger.info(`Processing ${changes.length} MySQL changes for ${this.syncState.sheetId}`);
@@ -279,5 +281,231 @@ export class MySQLToSheetsWorker {
       column = (column - temp - 1) / 26;
     }
     return letter;
+  }
+
+  /**
+   * ⚠️ CRITICAL POLLING FALLBACK - DO NOT REMOVE
+   * Used when MySQL TRIGGER privilege is not available
+   */
+  private async pollingBasedSync(): Promise<void> {
+    try {
+      const currentMySQLData = await this.dbManager.getTableData(this.syncState.tableName);
+      const cachedSnapshot = await this.redisClient.getCache<any[]>(
+        `mysql_snapshot_${this.syncState.sheetId}`
+      );
+
+      if (!cachedSnapshot) {
+        await this.fullSync(currentMySQLData);
+        await this.redisClient.setCache(
+          `mysql_snapshot_${this.syncState.sheetId}`,
+          currentMySQLData,
+          3600
+        );
+        return;
+      }
+
+      const schema = await this.dbManager.getTableSchema(this.syncState.tableName);
+      const primaryKey = schema.primaryKey[0] || 'id';
+      const changes = this.detectMySQLChanges(cachedSnapshot, currentMySQLData, primaryKey);
+
+      if (changes.inserts.length === 0 && changes.updates.length === 0 && changes.deletes.length === 0) {
+        return;
+      }
+
+      logger.info(`MySQL polling detected ${changes.inserts.length} inserts, ${changes.updates.length} updates, ${changes.deletes.length} deletes`);
+
+      await this.applyChangesToSheet(changes, schema);
+      await this.redisClient.setCache(
+        `mysql_snapshot_${this.syncState.sheetId}`,
+        currentMySQLData,
+        3600
+      );
+
+      // ⚠️ CRITICAL: Update sheet snapshot to prevent infinite loop with Sheets→MySQL
+      const updatedSheetData = await this.googleSheets.readSheet(
+        this.syncState.sheetId,
+        GoogleSheetsService.buildRange(this.syncState.sheetName, 'A:ZZ')
+      );
+      const parsedSheetData = this.googleSheets.parseDataFromSheets(
+        updatedSheetData.values,
+        updatedSheetData.headers
+      );
+      await this.redisClient.setCache(
+        `sheet_snapshot_${this.syncState.sheetId}`,
+        { timestamp: new Date(), data: parsedSheetData, hash: this.hashData(parsedSheetData) },
+        3600
+      );
+
+      this.io.to(`sync_${this.syncState.sheetId}`).emit('data_changed', {
+        source: 'mysql',
+        changeCount: changes.inserts.length + changes.updates.length + changes.deletes.length,
+        timestamp: new Date()
+      });
+    } catch (error) {
+      logger.error(`Polling-based sync failed for ${this.syncState.sheetId}`, error);
+    }
+  }
+
+  private detectMySQLChanges(
+    oldData: any[],
+    newData: any[],
+    primaryKey: string
+  ): { inserts: any[]; updates: any[]; deletes: any[] } {
+    const inserts: any[] = [];
+    const updates: any[] = [];
+    const deletes: any[] = [];
+
+    const oldMap = new Map<string, any>();
+    for (const row of oldData) {
+      const pkValue = row[primaryKey];
+      if (pkValue !== null && pkValue !== undefined) {
+        oldMap.set(String(pkValue), row);
+      }
+    }
+
+    const newMap = new Map<string, any>();
+    for (const row of newData) {
+      const pkValue = row[primaryKey];
+      if (pkValue !== null && pkValue !== undefined) {
+        const key = String(pkValue);
+        newMap.set(key, row);
+
+        if (!oldMap.has(key)) {
+          inserts.push(row);
+        } else if (JSON.stringify(oldMap.get(key)) !== JSON.stringify(row)) {
+          updates.push(row);
+        }
+      }
+    }
+
+    for (const [key, oldRow] of oldMap.entries()) {
+      if (!newMap.has(key)) {
+        deletes.push(oldRow);
+      }
+    }
+
+    return { inserts, updates, deletes };
+  }
+
+  private async applyChangesToSheet(
+    changes: { inserts: any[]; updates: any[]; deletes: any[] },
+    schema: any
+  ): Promise<void> {
+    const primaryKey = schema.primaryKey[0] || 'id';
+    const headers = schema.columns
+      .filter((col: any) => !EXCLUDED_COLUMNS.has(col.name) || col.name === primaryKey)
+      .map((col: any) => col.name);
+
+    const sheetData = await this.googleSheets.readSheet(
+      this.syncState.sheetId,
+      GoogleSheetsService.buildRange(this.syncState.sheetName, 'A:ZZ')
+    );
+
+    // Handle inserts
+    if (changes.inserts.length > 0) {
+      const rowsToAppend = changes.inserts.map(row =>
+        headers.map((col: string) => (row[col] === null || row[col] === undefined ? '' : row[col]))
+      );
+      await this.googleSheets.appendRows(
+        this.syncState.sheetId,
+        this.syncState.sheetName,
+        rowsToAppend
+      );
+      logger.info(`Appended ${rowsToAppend.length} rows to Google Sheets`);
+    }
+
+    // Handle updates
+    if (changes.updates.length > 0) {
+      const updates = [];
+      for (const row of changes.updates) {
+        const pkValue = row[primaryKey];
+        const rowIndex = this.findRowIndexByPrimaryKey(
+          sheetData.values,
+          sheetData.headers,
+          primaryKey,
+          pkValue
+        );
+
+        if (rowIndex !== -1) {
+          const sheetRow = rowIndex + 2;
+          const rowData = headers.map((col: string) =>
+            row[col] === null || row[col] === undefined ? '' : row[col]
+          );
+          const cellRange = `A${sheetRow}:${this.columnToLetter(headers.length)}${sheetRow}`;
+          updates.push({
+            range: GoogleSheetsService.buildRange(this.syncState.sheetName, cellRange),
+            values: [rowData]
+          });
+        }
+      }
+
+      if (updates.length > 0) {
+        await this.googleSheets.updateCells(this.syncState.sheetId, updates);
+        logger.info(`Updated ${updates.length} rows in Google Sheets`);
+      }
+    }
+
+    // Handle deletes
+    if (changes.deletes.length > 0) {
+      const rowsToDelete: number[] = [];
+      for (const row of changes.deletes) {
+        const pkValue = row[primaryKey];
+        const rowIndex = this.findRowIndexByPrimaryKey(
+          sheetData.values,
+          sheetData.headers,
+          primaryKey,
+          pkValue
+        );
+
+        if (rowIndex !== -1) {
+          rowsToDelete.push(rowIndex + 2);
+        }
+      }
+
+      if (rowsToDelete.length > 0) {
+        rowsToDelete.sort((a, b) => b - a);
+        for (const rowNumber of rowsToDelete) {
+          await this.googleSheets.deleteRows(this.syncState.sheetId, 0, rowNumber - 1, rowNumber);
+        }
+        logger.info(`Deleted ${rowsToDelete.length} rows from Google Sheets`);
+      }
+    }
+  }
+
+  private async fullSync(mysqlData: any[]): Promise<void> {
+    const schema = await this.dbManager.getTableSchema(this.syncState.tableName);
+    const primaryKey = schema.primaryKey[0] || 'id';
+    const headers = schema.columns
+      .filter((col: any) => !EXCLUDED_COLUMNS.has(col.name) || col.name === primaryKey)
+      .map((col: any) => col.name);
+
+    const sheetData = await this.googleSheets.readSheet(
+      this.syncState.sheetId,
+      GoogleSheetsService.buildRange(this.syncState.sheetName, 'A:ZZ')
+    );
+
+    if (sheetData.values.length === 0 && mysqlData.length > 0) {
+      const rowsToAppend = mysqlData.map(row =>
+        headers.map((col: string) => (row[col] === null || row[col] === undefined ? '' : row[col]))
+      );
+      await this.googleSheets.appendRows(
+        this.syncState.sheetId,
+        this.syncState.sheetName,
+        rowsToAppend
+      );
+    }
+
+    logger.info(`Full sync completed: ${mysqlData.length} rows synced to Google Sheets`);
+  }
+
+  private hashData(data: any[]): string {
+    const str = JSON.stringify(data);
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash;
+    }
+    return hash.toString();
   }
 }
