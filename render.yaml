@@ -44,6 +44,7 @@ services:
     name: superjoin-redis
     plan: free
     maxmemoryPolicy: noeviction
+    ipAllowList: []  # Empty array allows all IPs (required for free tier)
 
 databases:
   - name: superjoin-db
