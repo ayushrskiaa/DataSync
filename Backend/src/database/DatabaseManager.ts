@@ -82,7 +82,7 @@ export class DatabaseManager {
        AND table_name NOT LIKE '_sync_%'
        ORDER BY table_name`
     );
-    return result.rows.map(row => row.table_name);
+    return result.rows.map((row: any) => row.table_name);
   }
 
   // Create table from sheet headers
@@ -138,7 +138,7 @@ export class DatabaseManager {
       [tableName]
     );
 
-    const columnDefs: ColumnDefinition[] = result.rows.map(col => ({
+    const columnDefs: ColumnDefinition[] = result.rows.map((col: any) => ({
       name: col.name,
       type: col.type,
       nullable: col.nullable === 'YES',
@@ -230,11 +230,11 @@ export class DatabaseManager {
     logger.info(`PostgreSQL using timestamp-based change tracking for ${tableName}`);
   }
 
-  async changeTrackingTriggersExist(tableName: string): Promise<boolean> {
+  async changeTrackingTriggersExist(_tableName: string): Promise<boolean> {
     return false; // Not using triggers in PostgreSQL
   }
 
-  async ensureChangeTrackingTriggers(tableName: string): Promise<void> {
+  async ensureChangeTrackingTriggers(_tableName: string): Promise<void> {
     // Not needed for PostgreSQL
   }
 
@@ -267,7 +267,7 @@ export class DatabaseManager {
     );
   }
 
-  async dropChangeTrackingTriggers(tableName: string): Promise<void> {
+  async dropChangeTrackingTriggers(_tableName: string): Promise<void> {
     // Not used in PostgreSQL version
   }
 
