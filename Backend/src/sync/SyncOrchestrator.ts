@@ -6,7 +6,6 @@ import { logger } from '../utils/logger';
 import { SyncConfig, SyncState } from '../types';
 import { MySQLToSheetsWorker } from './MySQLToSheetsWorker';
 import { SheetsToMySQLWorker } from './SheetsToMySQLWorker';
-import { ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 
 const EXCLUDED_COLUMNS = new Set(['created_at', 'updated_at']);
 
@@ -107,8 +106,8 @@ export class SyncOrchestrator {
       // Create sync state in database
       const pool = this.dbManager.getPool();
       await pool.query(
-        `INSERT INTO _sync_state (sheet_id, sheet_name, table_name, conflict_resolution, status)
-         VALUES (?, ?, ?, ?, 'active')`,
+        `INSERT INTO _sync_config (sheet_id, sheet_name, table_name, conflict_resolution, is_active)
+         VALUES ($1, $2, $3, $4, true)`,
         [config.sheetId, canonicalSheetName, config.tableName, config.conflictResolution]
       );
 
@@ -117,12 +116,8 @@ export class SyncOrchestrator {
         await this.dbManager.createChangeTrackingTriggers(config.tableName);
       } catch (error: any) {
         // Triggers are nice-to-have but not required - we can use polling instead
-        if (error.code === 'ER_BINLOG_CREATE_ROUTINE_NEED_SUPER' || error.errno === 1419) {
-          logger.warn(`Could not create triggers for ${config.tableName} - will use polling for change detection`);
-        } else {
-          // For other errors, log but continue (don't fail sync creation)
-          logger.warn(`Trigger creation warning for ${config.tableName}:`, error.message);
-        }
+        // PostgreSQL doesn't use triggers in this implementation, but keep for compatibility
+        logger.warn(`Could not create triggers for ${config.tableName} - will use polling for change detection`, error.message);
       }
 
       // Get the created sync state
@@ -286,7 +281,7 @@ export class SyncOrchestrator {
     }
 
     await this.dbManager.getPool().query(
-      `UPDATE _sync_state SET status = 'paused' WHERE sheet_id = ?`,
+      `UPDATE _sync_config SET is_active = false WHERE sheet_id = $1`,
       [sheetId]
     );
 
@@ -301,7 +296,7 @@ export class SyncOrchestrator {
     }
 
     await this.dbManager.getPool().query(
-      `UPDATE _sync_state SET status = 'active' WHERE sheet_id = ?`,
+      `UPDATE _sync_config SET is_active = true WHERE sheet_id = $1`,
       [sheetId]
     );
 
@@ -328,7 +323,7 @@ export class SyncOrchestrator {
 
     // Delete from database
     await this.dbManager.getPool().query(
-      `DELETE FROM _sync_state WHERE sheet_id = ?`,
+      `DELETE FROM _sync_config WHERE sheet_id = $1`,
       [sheetId]
     );
 
@@ -337,10 +332,11 @@ export class SyncOrchestrator {
   }
 
   async getSyncState(sheetId: string): Promise<SyncState | null> {
-    const [rows] = await this.dbManager.getPool().query<RowDataPacket[]>(
-      `SELECT * FROM _sync_state WHERE sheet_id = ? LIMIT 1`,
+    const result = await this.dbManager.getPool().query(
+      `SELECT * FROM _sync_config WHERE sheet_id = $1 LIMIT 1`,
       [sheetId]
     );
+    const rows = result.rows;
 
     if (rows.length === 0) return null;
 
@@ -361,11 +357,12 @@ export class SyncOrchestrator {
   }
 
   async getActiveSyncs(): Promise<SyncState[]> {
-    const [rows] = await this.dbManager.getPool().query<RowDataPacket[]>(
-      `SELECT * FROM _sync_state WHERE status = 'active'`
+    const result = await this.dbManager.getPool().query(
+      `SELECT * FROM _sync_config WHERE is_active = true`
     );
+    const rows = result.rows;
 
-    return rows.map(row => ({
+    return rows.map((row: any) => ({
       id: row.id,
       sheetId: row.sheet_id,
       sheetName: row.sheet_name,
@@ -381,11 +378,12 @@ export class SyncOrchestrator {
   }
 
   async getAllSyncs(): Promise<SyncState[]> {
-    const [rows] = await this.dbManager.getPool().query<RowDataPacket[]>(
-      `SELECT * FROM _sync_state ORDER BY created_at DESC`
+    const result = await this.dbManager.getPool().query(
+      `SELECT * FROM _sync_config ORDER BY created_at DESC`
     );
+    const rows = result.rows;
 
-    return rows.map(row => ({
+    return rows.map((row: any) => ({
       id: row.id,
       sheetId: row.sheet_id,
       sheetName: row.sheet_name,
@@ -400,18 +398,18 @@ export class SyncOrchestrator {
     }));
   }
 
-  async getConflicts(sheetId: string): Promise<RowDataPacket[]> {
+  async getConflicts(sheetId: string): Promise<any[]> {
     const syncState = await this.getSyncState(sheetId);
     if (!syncState) {
       throw new Error(`Sync configuration not found for sheet: ${sheetId}`);
     }
 
-    const [rows] = await this.dbManager.getPool().query<RowDataPacket[]>(
-      `SELECT * FROM _sync_conflicts WHERE sync_state_id = ? ORDER BY created_at DESC`,
-      [syncState.id]
+    const result = await this.dbManager.getPool().query(
+      `SELECT * FROM _sync_conflicts WHERE sheet_id = $1 ORDER BY created_at DESC`,
+      [sheetId]
     );
 
-    return rows;
+    return result.rows;
   }
 
   async resolveConflict(
@@ -425,13 +423,14 @@ export class SyncOrchestrator {
       throw new Error(`Unsupported conflict resolution value: ${resolution}`);
     }
 
-    const [result] = await this.dbManager.getPool().query<ResultSetHeader>(
+    const result = await this.dbManager.getPool().query(
       `UPDATE _sync_conflicts 
-         SET resolution = ?,
-             resolved_data = ?,
-             resolved_at = NOW(6),
-             resolved_by = ?
-       WHERE id = ?`,
+         SET resolution_strategy = $1,
+             resolved = true,
+             resolved_at = CURRENT_TIMESTAMP,
+             resolved_data = $2,
+             resolved_by = $3
+       WHERE id = $4`,
       [
         resolution,
         resolvedData ? JSON.stringify(resolvedData) : null,
@@ -440,7 +439,7 @@ export class SyncOrchestrator {
       ]
     );
 
-    if (result.affectedRows === 0) {
+    if (result.rowCount === 0) {
       throw new Error(`Conflict ${conflictId} not found`);
     }
   }

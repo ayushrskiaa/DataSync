@@ -2,7 +2,6 @@ import { DatabaseManager } from "../database/DatabaseManager";
 import { GoogleSheetsService } from "../services/GoogleSheetsService";
 import { RedisClient } from "../services/RedisClient";
 import { Server as SocketServer } from "socket.io";
-import { RowDataPacket } from "mysql2/promise";
 import { SyncState, ChangeDetectionResult, SheetRowChange, TableSchema } from "../types";
 import { logger } from "../utils/logger";
 
@@ -134,7 +133,7 @@ export class SheetsToMySQLWorker {
       const connection = await this.dbManager.getConnection();
 
       try {
-        await connection.beginTransaction();
+        await connection.query('BEGIN');
         const pendingPrimaryKeyUpdates: Array<{ rowIndex: number; value: any }> = [];
 
         for (const change of changes.added) {
@@ -171,15 +170,15 @@ export class SheetsToMySQLWorker {
             }
 
             const result = await this.dbManager.insertRow(this.syncState.tableName, cleanedRow);
-            const insertedPk = this.hasPrimaryKeyValue(row[primaryKey]) ? row[primaryKey] : result?.insertId;
+            const insertedPk = this.hasPrimaryKeyValue(row[primaryKey]) ? row[primaryKey] : result?.id;
             await this.dbManager.markLatestRowChangeSynced(
               this.syncState.tableName,
               insertedPk,
               'INSERT'
             );
 
-            if (!this.hasPrimaryKeyValue(row[primaryKey]) && result?.insertId) {
-              pendingPrimaryKeyUpdates.push({ rowIndex, value: result.insertId });
+            if (!this.hasPrimaryKeyValue(row[primaryKey]) && result?.id) {
+              pendingPrimaryKeyUpdates.push({ rowIndex, value: result.id });
             }
           } catch (error) {
             logger.error(`Failed to insert row from sheet row ${rowIndex}`, { error });
@@ -215,14 +214,14 @@ export class SheetsToMySQLWorker {
               }
             } else {
               const result = await this.dbManager.insertRow(this.syncState.tableName, cleanedRow);
-              const insertedPk = this.hasPrimaryKeyValue(row[primaryKey]) ? row[primaryKey] : result?.insertId;
+              const insertedPk = this.hasPrimaryKeyValue(row[primaryKey]) ? row[primaryKey] : result?.id;
               await this.dbManager.markLatestRowChangeSynced(
                 this.syncState.tableName,
                 insertedPk,
                 'INSERT'
               );
-              if (result?.insertId) {
-                pendingPrimaryKeyUpdates.push({ rowIndex, value: result.insertId });
+              if (result?.id) {
+                pendingPrimaryKeyUpdates.push({ rowIndex, value: result.id });
               }
             }
           } catch (error) {
@@ -248,7 +247,7 @@ export class SheetsToMySQLWorker {
           }
         }
 
-        await connection.commit();
+        await connection.query('COMMIT');
         await this.storeSnapshot(currentData);
 
         if (pendingPrimaryKeyUpdates.length > 0 && primaryKeyColumnLetter) {
@@ -264,7 +263,7 @@ export class SheetsToMySQLWorker {
         }
 
         await this.dbManager.getPool().query(
-          `UPDATE _sync_state SET last_sheet_sync = NOW(6), last_sync_timestamp = NOW(6) WHERE sheet_id = ?`,
+          `UPDATE _sync_config SET last_sync_timestamp = CURRENT_TIMESTAMP WHERE sheet_id = $1`,
           [this.syncState.sheetId]
         );
         const now = new Date();
@@ -279,7 +278,7 @@ export class SheetsToMySQLWorker {
 
         logger.info(`Sheets->MySQL sync completed for ${this.syncState.sheetId}`);
       } catch (error) {
-        await connection.rollback();
+        await connection.query('ROLLBACK');
         throw error;
       } finally {
         connection.release();
@@ -288,7 +287,7 @@ export class SheetsToMySQLWorker {
       logger.error(`Sheets->MySQL sync failed for ${this.syncState.sheetId}`, error);
 
       await this.dbManager.getPool().query(
-        `UPDATE _sync_state SET status = 'error', error_message = ? WHERE sheet_id = ?`,
+        `UPDATE _sync_config SET error_message = $1 WHERE sheet_id = $2  `,
         [error instanceof Error ? error.message : String(error), this.syncState.sheetId]
       );
 
@@ -446,10 +445,11 @@ export class SheetsToMySQLWorker {
   }
 
   private async refreshSyncStateTimestamps(): Promise<void> {
-    const [rows] = await this.dbManager.getPool().query<RowDataPacket[]>(
-      `SELECT last_sync_timestamp, last_sheet_sync FROM _sync_state WHERE id = ?`,
+    const result = await this.dbManager.getPool().query(
+      `SELECT last_sync_timestamp, last_sheet_sync FROM _sync_config WHERE id = $1`,
       [this.syncState.id]
     );
+    const rows = result.rows;
 
     if (rows.length > 0) {
       const record = rows[0];
@@ -487,10 +487,10 @@ export class SheetsToMySQLWorker {
 
     await this.dbManager.getPool().query(
       `INSERT INTO _sync_conflicts
-       (sync_state_id, row_identifier, conflict_type, sheet_data, db_data, sheet_timestamp, db_timestamp, resolution)
-       VALUES (?, ?, 'concurrent_update', ?, ?, NOW(6), NOW(6), ?)`,
+       (sheet_id, row_identifier, conflict_type, sheet_data, db_data, resolution_strategy)
+       VALUES ($1, $2, 'concurrent_update', $3, $4, $5)`,
       [
-        this.syncState.id,
+        this.syncState.sheetId,
         String(rowId),
         JSON.stringify(sheetRow),
         JSON.stringify(dbRow),
