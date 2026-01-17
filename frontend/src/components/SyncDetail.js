@@ -94,7 +94,6 @@ const SyncDetail = () => {
       const response = await apiClient.get(`/api/tables/${table}/data?limit=50`);
       setTableData(response.data.data);
     } catch (err) {
-      console.error('Failed to load table data', err);
     }
   }, [syncState?.tableName]);
 
@@ -106,7 +105,6 @@ const SyncDetail = () => {
       const response = await apiClient.get(`/api/tables/${table}/schema`);
       setTableSchema(response.data.data);
     } catch (err) {
-      console.error('Failed to load table schema', err);
     }
   }, [syncState?.tableName]);
 
@@ -115,7 +113,6 @@ const SyncDetail = () => {
       const response = await apiClient.get(`/api/sync/conflicts/${sheetId}`);
       setConflicts(response.data.data);
     } catch (err) {
-      console.error('Failed to load conflicts', err);
     }
   }, [sheetId]);
 
@@ -128,7 +125,6 @@ const SyncDetail = () => {
       await loadConflicts();
     } catch (err) {
       setError('Failed to load sync details');
-      console.error(err);
     } finally {
       setLoading(false);
     }
@@ -138,12 +134,10 @@ const SyncDetail = () => {
     const newSocket = io(WS_BASE_URL);
     
     newSocket.on('connect', () => {
-      console.log('WebSocket connected');
       newSocket.emit('join_sync', sheetId);
     });
 
     newSocket.on('data_changed', (data) => {
-      console.log('Data changed:', data);
       setLiveUpdates(prev => [{
         ...data,
         id: Date.now()
@@ -156,7 +150,6 @@ const SyncDetail = () => {
     });
 
     newSocket.on('conflict_detected', (data) => {
-      console.log('Conflict detected:', data);
       loadConflicts();
     });
 
@@ -185,7 +178,6 @@ const SyncDetail = () => {
       }, ...prev]);
     } catch (err) {
       setError('Failed to trigger sync');
-      console.error(err);
     }
   };
 
@@ -265,7 +257,6 @@ const SyncDetail = () => {
       await loadTableData(syncState.tableName);
     } catch (err) {
       setAddRowError(err.response?.data?.error || 'Failed to add row');
-      console.error('Failed to add row', err);
     } finally {
       setAddingRow(false);
     }
@@ -309,7 +300,6 @@ const SyncDetail = () => {
       await deleteTableRow(syncState.tableName, primaryKeyPayload);
       await loadTableData(syncState.tableName);
     } catch (err) {
-      console.error('Failed to delete row', err);
       setDeleteError(err.response?.data?.error || 'Failed to delete row');
     } finally {
       setDeletingRowKey(null);
