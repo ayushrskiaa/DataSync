@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS _sync_conflicts (
     resolved BOOLEAN DEFAULT FALSE,
     resolution_strategy VARCHAR(50),
     resolved_at TIMESTAMP,
+    resolved_data JSONB,
+    resolved_by VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
