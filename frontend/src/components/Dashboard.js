@@ -38,7 +38,6 @@ const Dashboard = () => {
       setError(null);
     } catch (err) {
       setError('Failed to load syncs');
-      console.error(err);
     } finally {
       setLoading(false);
     }
@@ -50,7 +49,6 @@ const Dashboard = () => {
       loadSyncs();
     } catch (err) {
       setError('Failed to pause sync');
-      console.error(err);
     }
   };
 
@@ -60,7 +58,6 @@ const Dashboard = () => {
       loadSyncs();
     } catch (err) {
       setError('Failed to resume sync');
-      console.error(err);
     }
   };
 
@@ -71,7 +68,6 @@ const Dashboard = () => {
         loadSyncs();
       } catch (err) {
         setError('Failed to delete sync');
-        console.error(err);
       }
     }
   };
