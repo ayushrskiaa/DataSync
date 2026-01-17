@@ -1,3 +1,4 @@
 import dotenv from 'dotenv';
 
-dotenv.config();
+// Load .env file in development, skip silently in production
+dotenv.config({ path: '.env' });

@@ -145,6 +145,9 @@ class App {
 // Start application
 const app = new App();
 app.start().catch((error) => {
+  console.error('❌ FATAL ERROR - Application failed to start');
+  console.error('Error message:', error.message);
+  console.error('Stack trace:', error.stack);
   logger.error('Failed to start application', error);
   process.exit(1);
 });
