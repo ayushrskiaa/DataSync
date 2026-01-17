@@ -48,3 +48,4 @@ services:
 databases:
   - name: superjoin-db
     plan: free
+    ipAllowList: []  # Empty array allows all IPs (required for free tier)
