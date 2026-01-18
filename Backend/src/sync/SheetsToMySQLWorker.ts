@@ -401,20 +401,22 @@ export class SheetsToMySQLWorker {
     return true;
   }
 
-  private normalizeValue(value: any): string | number | boolean | null {
+  private normalizeValue(value: any): string {
     if (value === null || value === undefined) {
-      return null;
+      return '';
     }
 
     if (value instanceof Date) {
       return value.toISOString();
     }
 
-    if (typeof value === "number" || typeof value === "boolean") {
-      return value;
-    }
-
-    return String(value);
+    const str = String(value).trim();
+    
+    // Normalize booleans
+    if (str.toLowerCase() === 'true') return 'true';
+    if (str.toLowerCase() === 'false') return 'false';
+    
+    return str;
   }
 
   private findMissingRequiredColumns(row: any, schema: TableSchema, primaryKey: string): string[] {

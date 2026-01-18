@@ -372,8 +372,20 @@ export class MySQLToSheetsWorker {
 
         if (!oldMap.has(key)) {
           inserts.push(row);
-        } else if (JSON.stringify(oldMap.get(key)) !== JSON.stringify(row)) {
-          updates.push(row);
+        } else {
+            // Compare without timestamps
+            const oldRow = oldMap.get(key);
+            const oldRowClean = { ...oldRow };
+            const newRowClean = { ...row };
+            
+            delete oldRowClean.created_at;
+            delete oldRowClean.updated_at;
+            delete newRowClean.created_at;
+            delete newRowClean.updated_at;
+
+            if (JSON.stringify(oldRowClean) !== JSON.stringify(newRowClean)) {
+               updates.push(row);
+            }
         }
       }
     }
