@@ -10,7 +10,10 @@ CREATE TABLE IF NOT EXISTS _sync_config (
     sync_direction VARCHAR(20) DEFAULT 'bidirectional' CHECK (sync_direction IN ('bidirectional', 'sheet_to_db', 'db_to_sheet')),
     conflict_resolution VARCHAR(50) DEFAULT 'last_write_wins' CHECK (conflict_resolution IN ('last_write_wins', 'manual')),
     is_active BOOLEAN DEFAULT TRUE,
-    last_sync_at TIMESTAMP,
+    last_sync_timestamp TIMESTAMP,
+    last_sheet_sync TIMESTAMP,
+    status VARCHAR(50),
+    error_message TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

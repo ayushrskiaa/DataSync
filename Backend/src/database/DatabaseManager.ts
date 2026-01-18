@@ -93,11 +93,32 @@ export class DatabaseManager {
             sync_direction VARCHAR(20) DEFAULT 'bidirectional' CHECK (sync_direction IN ('bidirectional', 'sheet_to_db', 'db_to_sheet')),
             conflict_resolution VARCHAR(50) DEFAULT 'last_write_wins' CHECK (conflict_resolution IN ('last_write_wins', 'manual')),
             is_active BOOLEAN DEFAULT TRUE,
-            last_sync_at TIMESTAMP,
+            last_sync_timestamp TIMESTAMP,
+            last_sheet_sync TIMESTAMP,
+            status VARCHAR(50),
+            error_message TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           );
         `);
+
+        // Migration: Add missing columns if they don't exist (for existing tables)
+        try {
+          await client.query(`ALTER TABLE _sync_config ADD COLUMN IF NOT EXISTS last_sheet_sync TIMESTAMP`);
+          await client.query(`ALTER TABLE _sync_config ADD COLUMN IF NOT EXISTS status VARCHAR(50)`);
+          await client.query(`ALTER TABLE _sync_config ADD COLUMN IF NOT EXISTS error_message TEXT`);
+          
+          // Rename last_sync_at to last_sync_timestamp if needed
+          const checkCol = await client.query(`
+            SELECT column_name FROM information_schema.columns 
+            WHERE table_name = '_sync_config' AND column_name = 'last_sync_at'
+          `);
+          if (checkCol.rows.length > 0) {
+            await client.query(`ALTER TABLE _sync_config RENAME COLUMN last_sync_at TO last_sync_timestamp`);
+          }
+        } catch (migrationError) {
+          logger.warn('Schema migration failed (ignoring if columns exist)', migrationError);
+        }
 
         // Changelog table
         await client.query(`
