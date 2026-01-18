@@ -385,6 +385,9 @@ export class MySQLToSheetsWorker {
 
             if (JSON.stringify(oldRowClean) !== JSON.stringify(newRowClean)) {
                updates.push(row);
+               logger.debug(`MySQL Row ${key} updated:`, {
+                   diff: this.findObjectDiff(oldRowClean, newRowClean)
+               });
             }
         }
       }
@@ -397,6 +400,17 @@ export class MySQLToSheetsWorker {
     }
 
     return { inserts, updates, deletes };
+  }
+
+  private findObjectDiff(obj1: any, obj2: any): any {
+    const diff: any = {};
+    const keys = new Set([...Object.keys(obj1), ...Object.keys(obj2)]);
+    for (const key of keys) {
+        if (JSON.stringify(obj1[key]) !== JSON.stringify(obj2[key])) {
+            diff[key] = { old: obj1[key], new: obj2[key] };
+        }
+    }
+    return diff;
   }
 
   private async applyChangesToSheet(
