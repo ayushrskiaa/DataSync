@@ -148,28 +148,23 @@ Superjoin/
 └── README.md                            # This file
 ```
 
-## 🚀 Quick Start
+### Quick Start
 
 ### 🎥 Demo Instructions
 
-**For demonstration purposes, this application runs on localhost.**
+**The application is fully deployed on Render.com.**
 
-While the backend is deployed at [https://datasync-0wv9.onrender.com](https://datasync-0wv9.onrender.com), the full system is best demonstrated locally due to limitations of free-tier cloud platforms:
+- **Frontend**: [https://datasync-frontend.onrender.com](https://datasync-frontend.onrender.com)
+- **Backend API**: [https://datasync-0wv9.onrender.com](https://datasync-0wv9.onrender.com)
 
-**Why Local Demo:**
-- ⚠️ **Free Tier Limitations**: Render.com free tier sleeps after 15 minutes of inactivity, causing 30-50 second cold starts
-- ⚠️ **Connection Limits**: Clever Cloud MySQL free tier allows only 5 concurrent connections (app uses 3, leaving little room for multiple users)
-- ⚠️ **Redis Quota**: Upstash free tier limited to 10,000 commands/day (can be exceeded with multiple syncs)
-- ⚠️ **Performance**: Production deployment experiences significant latency due to free-tier resource constraints
-
-**The system works perfectly in local development** with Docker-based MySQL and Redis instances, providing the full real-time sync experience without these limitations.
+**Why Cloud Demo?**
+This project uses Render's free tier for PostgreSQL and Redis, which provides a realistic production environment without requiring local setup of multiple database containers.
 
 ### Local Development Setup
 
 #### Prerequisites
 
 - Node.js 18+
-- Docker & Docker Compose (for local MySQL/Redis)
 - Google Cloud Project with Sheets API enabled
 - Google OAuth 2.0 credentials
 
@@ -190,14 +185,7 @@ npm install
 
 # Configure environment
 cp .env.example .env
-# Edit .env with your credentials (see Backend/README.md)
-
-# Option A: Use Docker for local MySQL + Redis
-docker-compose up -d
-
-# Option B: Use production services (update .env)
-# DB_HOST=bnfr3dq4nfldisbvmjdx-mysql.services.clever-cloud.com
-# REDIS_HOST=loving-sculpin-17822.upstash.io
+# Edit .env with your credentials (see example below)
 
 # Start development server
 npm run dev
@@ -214,9 +202,9 @@ cd frontend
 npm install
 
 # Configure API URL (default points to localhost:3001)
-# For production backend, create .env.production:
-echo "REACT_APP_API_URL=https://datasync-0wv9.onrender.com" > .env.production
-echo "REACT_APP_WS_URL=https://datasync-0wv9.onrender.com" >> .env.production
+# Create .env:
+echo "REACT_APP_API_URL=http://localhost:3001" > .env
+echo "REACT_APP_WS_URL=http://localhost:3001" >> .env
 
 # Start development server
 npm start
@@ -232,90 +220,7 @@ Frontend runs on `http://localhost:3000`
 4. Add authorized redirect URIs:
    - Local: `http://localhost:3001/api/auth/google/callback`
    - Production: `https://datasync-0wv9.onrender.com/api/auth/google/callback`
-5. Copy Client ID and Secret to backend `.env`:
-   ```env
-   GOOGLE_CLIENT_ID=your-client-id
-   GOOGLE_CLIENT_SECRET=your-client-secret
-   GOOGLE_REDIRECT_URI=http://localhost:3001/api/auth/google/callback
-   ```
-6. Visit `/api/auth/google` to authenticate once (generates refresh token)
-
-📖 **Detailed Setup Guide**: See [SETUP.md](SETUP.md) for step-by-step instructions.
-
-## 🧪 Using the System
-
-### 1. Configure Your First Sync
-
-#### Option A: Use Existing MySQL Table
-1. Visit dashboard at `http://localhost:3000`
-2. Click "Configure New Sync"
-3. Enter Google Sheet ID (from spreadsheet URL)
-4. Enter Sheet Name (e.g., "Sheet1")
-5. Select "Use Existing Table" → Choose from dropdown
-6. Click "Configure Sync"
-
-**Result**: MySQL data copies to Google Sheets, then syncs bidirectionally
-
-#### Option B: Create New Table from Sheet
-1. In Google Sheets, add column headers in row 1:
-   ```
-   | name | email | age | department |
-   ```
-2. Add your data in rows below
-3. In dashboard, click "Configure New Sync"
-4. Enter Google Sheet ID and Sheet Name
-5. Select "Create New Table from Sheet"
-6. Enter new table name (e.g., `employees`)
-7. Click "Configure Sync"
-
-**Result**: New MySQL table created with columns from headers, sheet data imported, bidirectional sync starts
-
-### 2. Test Bidirectional Sync
-
-**Test Sheets → MySQL:**
-1. Edit a cell in Google Sheets
-2. Wait 2-3 seconds
-3. Check dashboard - should show sync activity
-4. Verify in MySQL:
-   ```bash
-   docker exec -it superjoin-mysql mysql -u syncuser -psyncpassword syncdb
-   SELECT * FROM your_table;
-   ```
-
-**Test MySQL → Sheets:**
-1. Update database:
-   ```bash
-   docker exec -it superjoin-mysql mysql -u syncuser -psyncpassword syncdb
-   UPDATE your_table SET column='new value' WHERE id=1;
-   ```
-2. Wait 2-3 seconds
-3. Check Google Sheets - should update automatically
-4. Dashboard shows sync activity
-
-### 3. Sync Multiple Sheets
-
-Repeat the configuration process for each sheet:
-- **Sheet 1** → `users` table
-- **Sheet 2** → `products` table  
-- **Sheet 3** → `orders` table
-
-Each sync runs independently with its own workers.
-
-### 4. Monitor Sync Status
-
-Dashboard shows:
-- Active syncs list
-- Last sync timestamp
-- Sync direction (Sheets→MySQL / MySQL→Sheets)
-- Error logs if any
-- Conflict history
-
-### 5. Manage Syncs
-
-- **Pause**: Stop sync temporarily (keep configuration)
-- **Resume**: Restart paused sync
-- **Delete**: Remove sync configuration and stop workers
-- **Manual Trigger**: Force immediate sync (useful for testing)
+5. Copy Client ID and Secret to backend `.env`.
 
 ## 🔧 Configuration
 
@@ -328,27 +233,11 @@ PORT=3001
 NODE_ENV=development
 FRONTEND_URL=http://localhost:3000
 
-# Database (Local Docker)
-DB_HOST=localhost
-DB_PORT=3306
-DB_USER=syncuser
-DB_PASSWORD=syncpassword
-DB_NAME=syncdb
+# Database (Render PostgreSQL)
+DATABASE_URL=postgresql://user:password@hostname/dbname
 
-# Or Production (Clever Cloud)
-DB_HOST=bnfr3dq4nfldisbvmjdx-mysql.services.clever-cloud.com
-DB_USER=ux7gxe5ocjhcyusn
-DB_PASSWORD=your-password
-DB_NAME=bnfr3dq4nfldisbvmjdx
-
-# Redis (Local Docker)
-REDIS_HOST=localhost
-REDIS_PORT=6379
-
-# Or Production (Upstash)
-REDIS_HOST=loving-sculpin-17822.upstash.io
-REDIS_PORT=6379
-REDIS_PASSWORD=your-password
+# Redis (Render Redis)
+REDIS_URL=redis://username:password@hostname:port
 
 # Google OAuth
 GOOGLE_CLIENT_ID=your-client-id
