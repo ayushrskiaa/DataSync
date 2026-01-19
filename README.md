@@ -4,11 +4,11 @@
 
 Bidirectional real-time synchronization between Google Sheets and MySQL database with auto-table creation, conflict resolution, and live monitoring dashboard.
 
-## 🎯 Overview
+## Overview
 
 A production-ready system that creates live 2-way data sync between Google Sheets and MySQL. Any change made in either system reflects in the other automatically. The system is schema-agnostic, works with any table structure, and includes comprehensive error handling.
 
-## ✨ Key Features
+## Key Features
 
 ### Core Functionality
 - ✅ **Bidirectional Real-Time Sync** - Changes sync automatically every 2 seconds
@@ -19,8 +19,7 @@ A production-ready system that creates live 2-way data sync between Google Sheet
 - ✅ **Live Dashboard** - Real-time monitoring interface with WebSocket updates
 
 ### Technical Highlights
-- ✅ **Polling-Based Sync** - Reliable change detection every 2s (works on free-tier databases)
-- ✅ **Fallback Strategy** - Graceful degradation when triggers unavailable
+- ✅ **Polling-Based Sync** - Reliable change detection every 2s 
 - ✅ **Redis Caching** - Distributed locking and snapshot storage
 - ✅ **WebSocket** - Real-time dashboard updates via Socket.io
 - ✅ **Connection Pooling** - Optimized for free-tier MySQL limits
@@ -28,43 +27,42 @@ A production-ready system that creates live 2-way data sync between Google Sheet
 
 ### Production Deployment
 - ✅ **Cloud Hosted** - Backend on Render.com (free tier)
-- ✅ **External Services** - Clever Cloud MySQL + Upstash Redis
+- ✅ **Database** - Render PostgreSQL + Render Redis (free tier)
 - ✅ **Docker Ready** - Full Docker Compose setup for local development
 - ✅ **TypeScript** - Type-safe codebase with strict checks
 - ✅ **Security** - Google OAuth 2.0, parameterized queries, input validation
-- ✅ **Error Handling** - Graceful failure recovery and detailed error logs
 
-## 🏗️ Architecture
+## Architecture
 
 ```
-┌─────────────────┐      WebSocket/REST       ┌──────────────────┐
-│  React Frontend │◄──────────────────────────►│  Express Server  │
-│ (localhost:3000)│                            │ (Render.com:3001)│
-└─────────────────┘                            └────────┬─────────┘
-                                                        │
-                    ┌───────────────────────────────────┼──────────────┐
-                    │                                   │              │
-                    ▼                                   ▼              ▼
-        ┌──────────────────────┐          ┌──────────────────┐  ┌────────────┐
-        │   Google Sheets API  │          │ Clever Cloud SQL │  │  Upstash   │
-        │  (Poll every 2s)     │          │  (MySQL 8.0)     │  │   Redis    │
-        └──────────────────────┘          └──────────────────┘  └────────────┘
-                    │                                   │              │
-                    │       Sync Orchestrator           │              │
-                    │     ┌──────────────────┐          │              │
-                    ├────►│ SheetsToMySQL    │──────────┤              │
-                    │     │   Worker         │          │              │
-                    │     │ (Poll & Compare) │          │              │
-                    │     └──────────────────┘          │              │
-                    │                                   │              │
-                    │     ┌──────────────────┐          │              │
-                    └─────│ MySQLToSheets    │◄─────────┤              │
-                          │   Worker         │          │              │
-                          │ (Polling-based)  │          │              │
-                          └──────────┬───────┘          │              │
-                                     │                  │              │
-                                     └──────────────────┴──────────────┘
-                                       Last-Write-Wins Resolution
+┌───────────────────────────┐      WebSocket/REST        ┌───────────────────────────────┐
+│       React Frontend      │◄──────────────────────────►│        Express Server         │
+│(datasync-frontend.onrender)                            │   (datasync-0wv9.onrender)    │
+└───────────────────────────┘                            └──────────────┬────────────────┘
+                                                                        │
+                                   ┌────────────────────────────────────┼─────────────────────────┐
+                                   │                                    │                         │
+                                   ▼                                    ▼                         ▼
+                       ┌──────────────────────┐               ┌────────────────────┐    ┌────────────────────┐ 
+                       │   Google Sheets API  │               │ Render PostgreSQL  │    │    Render Redis    │
+                       │  (Poll every 2s)     │               │    (Postgres 16)   │    │  (Session/Queue)   │
+                       └──────────────────────┘               └────────────────────┘    └────────────────────┘
+                                   │                                    │                         │
+                                   │       Sync Orchestrator            │                         │
+                                   │     ┌──────────────────┐           │                         │
+                                   ├────►│ SheetsToMySQL    │───────────┤                         │
+                                   │     │   Worker         │           │                         │
+                                   │     │ (Poll & Compare) │           │                         │
+                                   │     └──────────────────┘           │                         │
+                                   │                                    │                         │
+                                   │     ┌──────────────────┐           │                         │
+                                   └─────│ MySQLToSheets    │◄──────────┤                         │
+                                         │   Worker         │           │                         │
+                                         │ (Polling-based)  │           │                         │
+                                         └──────────┬───────┘           │                         │
+                                                    │                   │                         │
+                                                    └───────────────────┴─────────────────────────┘
+                                                      Last-Write-Wins Resolution
 ```
 
 ### How It Works
