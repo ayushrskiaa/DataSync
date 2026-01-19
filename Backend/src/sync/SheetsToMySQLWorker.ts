@@ -61,6 +61,11 @@ export class SheetsToMySQLWorker {
     await this.sync();
   }
 
+  /**
+   * Main sync loop for Sheets to MySQL direction.
+   * Acquired a lock, checks for changes in the sheet since the last snapshot,
+   * and applies inserts/updates/deletes to the database.
+   */
   private async sync(): Promise<void> {
     const lockKey = `sheets_to_mysql_${this.syncState.sheetId}`;
     const lockAcquired = await this.redisClient.acquireLock(lockKey, 30);
@@ -300,6 +305,10 @@ export class SheetsToMySQLWorker {
     }
   }
 
+  /**
+   * Compares the current sheet data with the stored snapshot to identify
+   * Added, Updated, and Deleted rows.
+   */
   private detectChanges(
     oldData: any[],
     newData: any[],
@@ -335,6 +344,7 @@ export class SheetsToMySQLWorker {
         added.push({ row, rowIndex });
       } else if (JSON.stringify(oldRow) !== JSON.stringify(row)) {
         updated.push({ row, rowIndex });
+        // Keeping debug log for traceability
         logger.debug(`Row ${rowIndex} changed:`, { 
             old: oldRow, 
             new: row,
@@ -396,6 +406,10 @@ export class SheetsToMySQLWorker {
     return cleaned;
   }
 
+  /**
+   * Compares a database row with a sheet row, normalizing values to ensure
+   * type differences (e.g., string "1" vs number 1) don't trigger false positives.
+   */
   private rowsEqual(dbRow: any, newRow: Record<string, any>): boolean {
     for (const [column, sheetValue] of Object.entries(newRow)) {
       const dbValue = dbRow[column];
@@ -438,6 +452,7 @@ export class SheetsToMySQLWorker {
 
   private hasPrimaryKeyValue(value: any): boolean {
     return value !== null && value !== undefined && value !== "";
+  
   }
 
   private columnToLetter(column: number): string {

@@ -284,8 +284,11 @@ export class MySQLToSheetsWorker {
   }
 
   /**
-   * ⚠️ CRITICAL POLLING FALLBACK - DO NOT REMOVE
-   * Used when MySQL TRIGGER privilege is not available
+   * Fallback synchronization method used when database triggers are not available.
+   * Compares the current database state with a cached snapshot to detect changes.
+   * 
+   * This method is essential for environments where the application database user
+   * does not have SUPER privileges to create triggers (e.g., some managed standard PostgreSQL instances).
    */
   private async pollingBasedSync(): Promise<void> {
     try {
@@ -321,7 +324,8 @@ export class MySQLToSheetsWorker {
         3600
       );
 
-      // ⚠️ CRITICAL: Update sheet snapshot to prevent infinite loop with Sheets→MySQL
+      // Update sheet snapshot to prevent "echo" loops where the Sheet worker
+      // detects the change we just made as a new user edit.
       const updatedSheetData = await this.googleSheets.readSheet(
         this.syncState.sheetId,
         GoogleSheetsService.buildRange(this.syncState.sheetName, 'A:ZZ')

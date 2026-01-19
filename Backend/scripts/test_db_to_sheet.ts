@@ -1,4 +1,12 @@
 
+/**
+ * Test Script: Database to Google Sheets Sync
+ * 
+ * This script manually inserts a row into the database to verify that the
+ * MySQLToSheetsWorker correctly detects the change and syncs it to the Google Sheet.
+ * 
+ * Usage: npx ts-node Backend/scripts/test_db_to_sheet.ts
+ */
 import { Client } from 'pg';
 import dotenv from 'dotenv';
 import path from 'path';

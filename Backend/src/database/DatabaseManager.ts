@@ -348,17 +348,25 @@ export class DatabaseManager {
     return result.rows[0];
   }
 
-  // PostgreSQL doesn't need triggers - using updated_at column
+  // --------------------------------------------------------------------------
+  // Trigger Management (Unused in PostgreSQL Implementation)
+  // 
+  // PostgreSQL handles updates via the `update_updated_at_column` function created 
+  // in initializeSchema(). The complex change tracking tables are populated by 
+  // workers or polling, not by database triggers in this specific implementation 
+  // to maximize compatibility with managed hosting services.
+  // --------------------------------------------------------------------------
+
   async createChangeTrackingTriggers(tableName: string): Promise<void> {
     logger.info(`PostgreSQL using timestamp-based change tracking for ${tableName}`);
   }
 
   async changeTrackingTriggersExist(_tableName: string): Promise<boolean> {
-    return false; // Not using triggers in PostgreSQL
+    return false; 
   }
 
   async ensureChangeTrackingTriggers(_tableName: string): Promise<void> {
-    // Not needed for PostgreSQL
+    // No-op for PostgreSQL
   }
 
   async markLatestRowChangeSynced(
