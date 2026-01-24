@@ -1,20 +1,18 @@
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: superjoin-mysql
-    command: --log_bin_trust_function_creators=1
+  postgres:
+    image: postgres:15-alpine
+    container_name: superjoin-postgres
     environment:
-      MYSQL_ROOT_PASSWORD: rootpassword
-      MYSQL_DATABASE: superjoin_db
-      MYSQL_USER: superjoin_user
-      MYSQL_PASSWORD: superjoin_pass
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: superjoin_db
     ports:
-      - "3307:3306"
+      - "5432:5432"
     volumes:
-      - mysql_data:/var/lib/mysql
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-postgres.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -27,11 +25,11 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s
       timeout: 3s
       retries: 5
 
 volumes:
-  mysql_data:
+  postgres_data:
   redis_data:
