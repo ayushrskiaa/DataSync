@@ -184,6 +184,7 @@ export class SheetsToMySQLWorker {
 
             if (!this.hasPrimaryKeyValue(row[primaryKey]) && result?.id) {
               pendingPrimaryKeyUpdates.push({ rowIndex, value: result.id });
+              row[primaryKey] = result.id;
             }
           } catch (error) {
             logger.error(`Failed to insert row from sheet row ${rowIndex}`, { error });
