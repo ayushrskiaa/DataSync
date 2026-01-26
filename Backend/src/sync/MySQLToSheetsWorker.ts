@@ -87,7 +87,7 @@ export class MySQLToSheetsWorker {
       
       // Update error status
       await this.dbManager.getPool().query(
-        `UPDATE _sync_state SET status = 'error', error_message = ? WHERE sheet_id = ?`,
+        `UPDATE _sync_config SET status = 'error', error_message = $1 WHERE sheet_id = $2`,
         [error instanceof Error ? error.message : String(error), this.syncState.sheetId]
       );
 
@@ -183,7 +183,7 @@ export class MySQLToSheetsWorker {
   private async updateSyncStateAndSnapshot() {
       // Update timestamp
       await this.dbManager.getPool().query(
-        `UPDATE _sync_state SET last_sync_timestamp = NOW(6) WHERE sheet_id = ?`,
+        `UPDATE _sync_config SET last_sync_timestamp = NOW() WHERE sheet_id = $1`,
         [this.syncState.sheetId]
       );
 

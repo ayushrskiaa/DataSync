@@ -367,8 +367,8 @@ export class SheetsToMySQLWorker {
     logger.warn(`Conflict detected for row ${rowId}`);
     // Simplified conflict logging
     await this.dbManager.getPool().query(
-      `INSERT INTO _sync_conflicts (sheet_id, row_identifier, conflict_type, sheet_data, db_data, resolution_strategy) VALUES ($1, $2, 'concurrent_update', $3, $4, 'sheet_wins')`,
-      [this.syncState.sheetId, String(rowId), JSON.stringify(sheetRow), JSON.stringify(dbRow)]
+      `INSERT INTO _sync_conflicts (sheet_id, table_name, row_id, conflict_type, sheet_data, db_data, resolution_strategy) VALUES ($1, $2, $3, 'concurrent_update', $4, $5, 'sheet_wins')`,
+      [this.syncState.sheetId, this.syncState.tableName, String(rowId), JSON.stringify(sheetRow), JSON.stringify(dbRow)]
     );
     
     // Default to strict 'sheet_wins' for now as requested by user logic preference usually
