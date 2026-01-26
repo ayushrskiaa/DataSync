@@ -447,11 +447,37 @@ export class MySQLToSheetsWorker {
       GoogleSheetsService.buildRange(this.syncState.sheetName, 'A:ZZ')
     );
 
-    // Handle inserts
+    const rowsToAppend: any[][] = [];
+    const updatesToApply: any[] = [...changes.updates];
+
+    // Filter inserts - check if they already exist in the sheet
     if (changes.inserts.length > 0) {
-      const rowsToAppend = changes.inserts.map(row =>
-        headers.map((col: string) => (row[col] === null || row[col] === undefined ? '' : row[col]))
-      );
+      for (const row of changes.inserts) {
+        const pkValue = row[primaryKey];
+        const rowIndex = this.findRowIndexByPrimaryKey(
+          sheetData.values,
+          sheetData.headers,
+          primaryKey,
+          pkValue
+        );
+
+        if (rowIndex !== -1) {
+          // Row exists in sheet - treat as update to ensure consistency
+          // This handles the "Echo" case where SheetsWorker added the row,
+          // and now MySQLWorker sees it as a new DB row.
+          updatesToApply.push(row);
+        } else {
+          // Genuine new row
+          const rowData = headers.map((col: string) =>
+            row[col] === null || row[col] === undefined ? '' : row[col]
+          );
+          rowsToAppend.push(rowData);
+        }
+      }
+    }
+
+    // Handle confirms/appends
+    if (rowsToAppend.length > 0) {
       await this.googleSheets.appendRows(
         this.syncState.sheetId,
         this.syncState.sheetName,
@@ -460,10 +486,10 @@ export class MySQLToSheetsWorker {
       logger.info(`Appended ${rowsToAppend.length} rows to Google Sheets`);
     }
 
-    // Handle updates
-    if (changes.updates.length > 0) {
+    // Handle updates (including converted inserts)
+    if (updatesToApply.length > 0) {
       const updates = [];
-      for (const row of changes.updates) {
+      for (const row of updatesToApply) {
         const pkValue = row[primaryKey];
         const rowIndex = this.findRowIndexByPrimaryKey(
           sheetData.values,
