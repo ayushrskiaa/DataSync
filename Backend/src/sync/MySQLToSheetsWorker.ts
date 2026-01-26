@@ -209,6 +209,22 @@ export class MySQLToSheetsWorker {
         [this.syncState.sheetId]
       );
 
+      // Update sheet snapshot to prevent "echo" loops where the Sheet worker
+      // detects the change we just made as a new user edit.
+      const updatedSheetData = await this.googleSheets.readSheet(
+        this.syncState.sheetId,
+        GoogleSheetsService.buildRange(this.syncState.sheetName, 'A:ZZ')
+      );
+      const parsedSheetData = this.googleSheets.parseDataFromSheets(
+        updatedSheetData.values,
+        updatedSheetData.headers
+      );
+      await this.redisClient.setCache(
+        `sheet_snapshot_${this.syncState.sheetId}`,
+        { timestamp: new Date(), data: parsedSheetData, hash: this.hashData(parsedSheetData) },
+        3600
+      );
+
       // Emit sync event
       this.io.to(`sync_${this.syncState.sheetId}`).emit('data_changed', {
         source: 'mysql',
