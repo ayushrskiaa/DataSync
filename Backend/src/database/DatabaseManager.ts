@@ -308,6 +308,14 @@ export class DatabaseManager {
   // Insert row
   async insertRow(tableName: string, data: Record<string, any>): Promise<any> {
     const columns = Object.keys(data);
+    
+    if (columns.length === 0) {
+      const result = await this.pool!.query(
+        `INSERT INTO ${this.escapeId(tableName)} DEFAULT VALUES RETURNING *`
+      );
+      return result.rows[0];
+    }
+
     const placeholders = columns.map((_, i) => `$${i + 1}`).join(', ');
     const values = Object.values(data);
 
